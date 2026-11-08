@@ -1,0 +1,30 @@
+simple_live_app/.vscode/settings.json
+simple_live_tv_app/.vscode/settings.json
+
+# macOS Spotlight Search index file
+*.DS_Store
+
+# Dart / Flutter
+.dart_tool/
+.fvm/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# 缓存与本地状态
+.task-cache/
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# iOS / macOS / CocoaPods
+**/ios/Pods/
+**/macos/Pods/
+**/*.xcworkspace/xcuserdata/
+
+# Android
+**/android/.gradle/
+**/android/local.properties
+*.keystore
