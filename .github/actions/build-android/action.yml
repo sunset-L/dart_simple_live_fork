@@ -55,7 +55,7 @@ runs:
         missing = [key for key in required if not os.environ.get(key)]
         if missing:
             raise SystemExit("::error::缺少 Android 签名 Secrets（TV 使用 TV_ 前缀）："
-                             + ", ".join(missing) + "。请参阅 .github/README.md。")
+                             + ", ".join(missing) + "。请参阅 .github/ACTIONS.md。")
         try:
             keystore_bytes = base64.b64decode("".join(os.environ["KEYSTORE_BASE64"].split()), validate=True)
         except binascii.Error:

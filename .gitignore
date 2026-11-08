@@ -28,3 +28,6 @@ build/
 **/android/.gradle/
 **/android/local.properties
 *.keystore
+
+# 本地 Codex 工具源码（不作为 App 子模块上传）
+/codex-zh/source/
