@@ -1,0 +1,154 @@
+name: 构建 Android APK
+description: 使用项目固定的 FVM 版本和仓库签名 Secrets，构建三个 ABI 的正式 APK。
+
+inputs:
+  app-directory:
+    description: simple_live_app 或 simple_live_tv_app
+    required: true
+  keystore-base64:
+    description: Android 签名文件的 Base64 内容
+    required: true
+  store-password:
+    description: 签名文件密码
+    required: true
+  key-password:
+    description: 签名密钥密码
+    required: true
+  key-alias:
+    description: 签名密钥别名
+    required: true
+
+outputs:
+  version:
+    description: pubspec.yaml 中的应用版本（含构建号）
+    value: ${{ steps.metadata.outputs.version }}
+  package-directory:
+    description: 供 upload-artifact 使用的 APK 目录
+    value: ${{ inputs.app-directory }}/build/actions-apk
+
+runs:
+  using: composite
+  steps:
+    - name: 检查项目和签名配置
+      id: metadata
+      shell: bash
+      env:
+        APP_DIRECTORY: ${{ inputs.app-directory }}
+        KEYSTORE_BASE64: ${{ inputs.keystore-base64 }}
+        STORE_PASSWORD: ${{ inputs.store-password }}
+        KEY_PASSWORD: ${{ inputs.key-password }}
+        KEY_ALIAS: ${{ inputs.key-alias }}
+      run: |
+        python3 - <<'PY'
+        import base64
+        import binascii
+        import json
+        import os
+        import re
+        from pathlib import Path
+
+        app = os.environ["APP_DIRECTORY"]
+        prefixes = {"simple_live_app": "simple-live-app", "simple_live_tv_app": "simple-live-tv"}
+        if app not in prefixes:
+            raise SystemExit("::error::不支持的应用目录。")
+        required = ("KEYSTORE_BASE64", "STORE_PASSWORD", "KEY_PASSWORD", "KEY_ALIAS")
+        missing = [key for key in required if not os.environ.get(key)]
+        if missing:
+            raise SystemExit("::error::缺少 Android 签名 Secrets（TV 使用 TV_ 前缀）："
+                             + ", ".join(missing) + "。请参阅 .github/README.md。")
+        try:
+            keystore_bytes = base64.b64decode("".join(os.environ["KEYSTORE_BASE64"].split()), validate=True)
+        except binascii.Error:
+            raise SystemExit("::error::签名文件不是有效的 Base64，请重新配置对应的 Secret。")
+        if not keystore_bytes:
+            raise SystemExit("::error::签名文件为空。")
+
+        project = Path(os.environ["GITHUB_WORKSPACE"]) / app
+        version_match = re.search(r"^version:\s*([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9]+)?)\s*$",
+                                  (project / "pubspec.yaml").read_text(encoding="utf-8"), re.MULTILINE)
+        if not version_match:
+            raise SystemExit("::error::无法读取 pubspec.yaml 的应用版本。")
+        flutter_version = json.loads((project / ".fvmrc").read_text(encoding="utf-8"))["flutter"]
+        if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", flutter_version):
+            raise SystemExit("::error::.fvmrc 必须使用固定的 Flutter 正式版本。")
+
+        # 签名文件放在 runner 临时目录，不进入仓库或 APK 上传目录。
+        signing_dir = Path(os.environ["RUNNER_TEMP"]) / "android-signing" / app
+        signing_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        keystore = signing_dir / "keystore.jks"
+        keystore.write_bytes(keystore_bytes)
+        keystore.chmod(0o600)
+        properties = {"storeFile": str(keystore), "storePassword": os.environ["STORE_PASSWORD"],
+                      "keyPassword": os.environ["KEY_PASSWORD"], "keyAlias": os.environ["KEY_ALIAS"]}
+        # Java Properties 使用 Unicode 转义，避免密码中的空格、反斜杠、换行或中文被误解析。
+        def escape_property(value):
+            encoded = value.encode("utf-16-be").hex()
+            return "".join("\\u" + encoded[i:i + 4] for i in range(0, len(encoded), 4))
+        key_properties = project / "android/key.properties"
+        key_properties.write_text("".join(key + "=" + escape_property(value) + "\n"
+                                          for key, value in properties.items()), encoding="ascii")
+        key_properties.chmod(0o600)
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+            output.write(f"version={version_match.group(1)}\n")
+            output.write(f"flutter-version={flutter_version}\n")
+            output.write(f"package-prefix={prefixes[app]}\n")
+        PY
+
+    - name: 配置 Java 17
+      uses: actions/setup-java@v6
+      with:
+        distribution: zulu
+        java-version: "17"
+        cache: gradle
+
+    - name: 配置 Android SDK
+      uses: android-actions/setup-android@v4
+      with:
+        packages: >-
+          platform-tools
+          platforms;android-36
+          build-tools;35.0.0
+          ndk;28.2.13676358
+
+    - name: 安装项目固定版本的 Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        channel: stable
+        flutter-version-file: ${{ inputs.app-directory }}/.fvmrc
+        cache: true
+
+    - name: 配置 FVM 并复用已安装的 Flutter SDK
+      shell: bash
+      env:
+        FLUTTER_VERSION: ${{ steps.metadata.outputs.flutter-version }}
+      run: |
+        dart pub global activate fvm 4.3.2
+        export PATH="${PUB_CACHE:-$HOME/.pub-cache}/bin:$PATH"
+        echo "${PUB_CACHE:-$HOME/.pub-cache}/bin" >> "$GITHUB_PATH"
+        export FVM_CACHE_PATH="$RUNNER_TEMP/fvm"
+        echo "FVM_CACHE_PATH=$FVM_CACHE_PATH" >> "$GITHUB_ENV"
+        mkdir -p "$FVM_CACHE_PATH/versions"
+        ln -s "$FLUTTER_ROOT" "$FVM_CACHE_PATH/versions/$FLUTTER_VERSION"
+
+    - name: 获取依赖并检查 Android 工具链
+      shell: bash
+      working-directory: ${{ inputs.app-directory }}
+      run: |
+        fvm install
+        fvm flutter config --jdk-dir "$JAVA_HOME"
+        fvm flutter pub get
+        fvm flutter analyze --suggestions
+
+    - name: 构建并整理 APK
+      shell: bash
+      working-directory: ${{ inputs.app-directory }}
+      env:
+        APP_VERSION: ${{ steps.metadata.outputs.version }}
+        PACKAGE_PREFIX: ${{ steps.metadata.outputs.package-prefix }}
+      run: |
+        fvm flutter build apk --release --split-per-abi --no-pub
+        mkdir -p build/actions-apk
+        for abi in armeabi-v7a arm64-v8a x86_64; do
+          cp "build/app/outputs/flutter-apk/app-$abi-release.apk" \
+            "build/actions-apk/$PACKAGE_PREFIX-$APP_VERSION-$abi.apk"
+        done
