@@ -211,7 +211,7 @@ class MinePage extends StatelessWidget {
                   ),
                   onTap: () {
                     launchUrlString(
-                      "https://github.com/xiaoyaocz/dart_simple_live",
+                      "https://github.com/sunset-L/dart_simple_live_fork",
                       mode: LaunchMode.externalApplication,
                     );
                   },
