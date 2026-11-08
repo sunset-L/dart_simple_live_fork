@@ -770,11 +770,12 @@ mixin PlayerGestureControlMixin
   ) {
     final delta = _lastVolumeDragDy - dy;
     final nowMicros = _volumeGestureClock.elapsedMicroseconds;
-    final sourceElapsed = sourceTimeStamp != null && _lastVolumeDragTime != null
-        ? (sourceTimeStamp - _lastVolumeDragTime!).inMicroseconds
-        : 0;
-    final elapsedMicros =
-        sourceElapsed > 0 ? sourceElapsed : nowMicros - _lastVolumeSampleMicros;
+    final previousTime = _lastVolumeDragTime;
+    // 有源时间戳时只使用源时间；重复或倒退的时间戳不改变快慢模式。
+    // 只有缺失源时间戳的代理事件才使用处理时钟，避免合并回调造成假高速。
+    final elapsedMicros = sourceTimeStamp != null && previousTime != null
+        ? (sourceTimeStamp - previousTime).inMicroseconds
+        : nowMicros - _lastVolumeSampleMicros;
     _lastVolumeDragDy = dy;
     _lastVolumeDragTime = sourceTimeStamp;
     _lastVolumeSampleMicros = nowMicros;

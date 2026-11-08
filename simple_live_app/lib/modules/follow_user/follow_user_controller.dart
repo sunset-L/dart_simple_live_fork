@@ -10,6 +10,7 @@ import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/follow_user_tag.dart';
+import 'package:simple_live_app/modules/mine/history/history_controller.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
 
@@ -28,6 +29,18 @@ class FollowUserController extends BasePageController<FollowUser> {
   // 用户自定义标签
   RxList<FollowUserTag> userTagList = <FollowUserTag>[].obs;
 
+  static const String _historyControllerTag = 'follow-watch-history';
+  final historyTag = FollowUserTag(
+    id: '__watch_history__',
+    tag: '观看记录',
+    userId: [],
+  );
+  late final HistoryController historyController;
+
+  /// 固定历史页只参与显示和翻页，不混入可编辑、可分配给主播的标签。
+  List<FollowUserTag> get pageTags => [...tagList, historyTag];
+  bool get isHistorySelected => filterMode.value.id == historyTag.id;
+
   final PageController tagPageController = PageController(keepPage: false);
   final tagUsers = <String, List<FollowUser>>{}.obs;
   final Map<String, VoidCallback> _tagScrollActions = {};
@@ -35,10 +48,12 @@ class FollowUserController extends BasePageController<FollowUser> {
   int _pageTransition = 0;
 
   int get selectedTagIndex =>
-      tagList.indexWhere((tag) => tag.id == filterMode.value.id);
+      pageTags.indexWhere((tag) => tag.id == filterMode.value.id);
 
   @override
   void onInit() {
+    historyController =
+        Get.put(HistoryController(), tag: _historyControllerTag);
     onUpdatedIndexedStream = EventBus.instance.listen(
       EventBus.kBottomNavigationBarClicked,
       (index) {
@@ -72,6 +87,7 @@ class FollowUserController extends BasePageController<FollowUser> {
 
   @override
   Future<List<FollowUser>> getData(int page, int pageSize) async {
+    if (isHistorySelected) return [];
     if (page > 1) {
       return Future.value([]);
     }
@@ -91,7 +107,7 @@ class FollowUserController extends BasePageController<FollowUser> {
     userTagList.assignAll(FollowService.instance.followTagList);
     tagList.assignAll([...tagList.take(3), ...userTagList]);
     // 刷新、改名后按 ID 保持选中；当前标签被删除时回到“全部”。
-    filterMode.value = tagList.firstWhere(
+    filterMode.value = pageTags.firstWhere(
       (tag) => tag.id == filterMode.value.id,
       orElse: () => tagList.first,
     );
@@ -123,6 +139,11 @@ class FollowUserController extends BasePageController<FollowUser> {
   List<FollowUser> usersForTag(FollowUserTag tag) => tagUsers[tag.id] ?? [];
 
   void _updateSelectedList() {
+    if (isHistorySelected) {
+      list.clear();
+      pageEmpty.value = false;
+      return;
+    }
     list.assignAll(usersForTag(filterMode.value));
     pageEmpty.value = list.isEmpty;
     if (selectedTagIndex >= 3) {
@@ -156,10 +177,11 @@ class FollowUserController extends BasePageController<FollowUser> {
   }
 
   void onTagPageChanged(int index) {
-    if (index < 0 || index >= tagList.length) {
+    final tags = pageTags;
+    if (index < 0 || index >= tags.length) {
       return;
     }
-    final tag = tagList[index];
+    final tag = tags[index];
     // 点击远处标签时，动画路过的中间页不改变目标标签的高亮。
     if (_targetTagId != null && _targetTagId != tag.id) {
       return;
@@ -200,6 +222,16 @@ class FollowUserController extends BasePageController<FollowUser> {
 
   @override
   void scrollToTopOrRefresh() {
+    if (isHistorySelected) {
+      final scroll = historyController.scrollController;
+      if (scroll.hasClients && scroll.offset > 0) {
+        scroll.animateTo(0,
+            duration: const Duration(milliseconds: 200), curve: Curves.linear);
+      } else {
+        historyController.refreshData();
+      }
+      return;
+    }
     final action = _tagScrollActions[filterMode.value.id];
     if (action != null) {
       action();
@@ -209,13 +241,14 @@ class FollowUserController extends BasePageController<FollowUser> {
   }
 
   void switchTag(int offset) {
+    final tags = pageTags;
     final currentIndex =
-        tagList.indexWhere((tag) => tag.id == filterMode.value.id);
+        tags.indexWhere((tag) => tag.id == filterMode.value.id);
     final nextIndex = (currentIndex < 0 ? 0 : currentIndex) + offset;
-    if (nextIndex < 0 || nextIndex >= tagList.length) {
+    if (nextIndex < 0 || nextIndex >= tags.length) {
       return;
     }
-    setFilterMode(tagList[nextIndex]);
+    setFilterMode(tags[nextIndex]);
   }
 
   void removeItem(FollowUser item) async {
@@ -268,6 +301,10 @@ class FollowUserController extends BasePageController<FollowUser> {
   }
 
   void addTag(String tag) async {
+    if (tag == historyTag.tag) {
+      SmartDialog.showToast("观看记录为固定标签");
+      return;
+    }
     FollowService.instance
         .addFollowUserTag(tag)
         .then((value) => updateTagList());
@@ -286,7 +323,7 @@ class FollowUserController extends BasePageController<FollowUser> {
       return;
     }
     // 避免重名
-    if (tagList.any((item) => item.tag == newTagName)) {
+    if (pageTags.any((item) => item.tag == newTagName)) {
       SmartDialog.showToast("标签名重复，修改失败");
       return;
     }
@@ -315,6 +352,7 @@ class FollowUserController extends BasePageController<FollowUser> {
 
   @override
   void onClose() {
+    Get.delete<HistoryController>(tag: _historyControllerTag);
     onUpdatedIndexedStream?.cancel();
     onUpdatedListStream?.cancel();
     _tagScrollActions.clear();

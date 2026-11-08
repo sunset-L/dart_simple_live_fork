@@ -3,7 +3,9 @@ import 'package:get/get.dart';
 import 'package:simple_live_app/app/app_style.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
+import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/modules/mine/history/history_controller.dart';
+import 'package:simple_live_app/modules/mine/history/history_swipe_delete.dart';
 import 'package:simple_live_app/routes/app_navigation.dart';
 import 'package:simple_live_app/widgets/net_image.dart';
 import 'package:simple_live_app/widgets/page_grid_view.dart';
@@ -13,8 +15,6 @@ class HistoryPage extends GetView<HistoryController> {
 
   @override
   Widget build(BuildContext context) {
-    var rowCount = MediaQuery.of(context).size.width ~/ 500;
-    if (rowCount < 1) rowCount = 1;
     return Scaffold(
       appBar: AppBar(
         title: const Text("观看记录"),
@@ -26,84 +26,94 @@ class HistoryPage extends GetView<HistoryController> {
           ),
         ],
       ),
-      body: PageGridView(
-        crossAxisSpacing: 12,
-        crossAxisCount: rowCount,
-        pageController: controller,
-        firstRefresh: true,
-        itemBuilder: (_, i) {
-          var item = controller.list[i];
-          var site = Sites.allSites[item.siteId]!;
-          return Dismissible(
-            key: ValueKey(item.id),
-            direction: DismissDirection.endToStart,
-            background: Container(
-              color: Colors.red,
-              padding: AppStyle.edgeInsetsA12,
-              alignment: Alignment.centerRight,
-              child: const Icon(
-                Icons.delete,
-                color: Colors.white,
-              ),
+      body: HistoryContent(controller: controller),
+    );
+  }
+}
+
+/// 独立页面和关注标签页共用的观看记录列表，不包含导航栏。
+class HistoryContent extends StatefulWidget {
+  const HistoryContent({required this.controller, super.key});
+
+  final HistoryController controller;
+
+  @override
+  State<HistoryContent> createState() => _HistoryContentState();
+}
+
+class _HistoryContentState extends State<HistoryContent>
+    with AutomaticKeepAliveClientMixin {
+  HistoryController get controller => widget.controller;
+
+  @override
+  bool get wantKeepAlive => true;
+
+  Future<void> _confirmRemove(History item) async {
+    final confirmed = await Utils.showAlertDialog("确定要删除此记录吗?", title: "删除记录");
+    if (!mounted || !confirmed || controller.isClosed) return;
+    controller.removeItem(item);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    var rowCount = MediaQuery.of(context).size.width ~/ 500;
+    if (rowCount < 1) rowCount = 1;
+    return PageGridView(
+      crossAxisSpacing: 12,
+      crossAxisCount: rowCount,
+      pageController: controller,
+      firstRefresh: true,
+      itemBuilder: (_, i) {
+        var item = controller.list[i];
+        var site = Sites.allSites[item.siteId]!;
+        return HistorySwipeDelete(
+          key: ValueKey(item.id),
+          onDelete: () => _confirmRemove(item),
+          child: ListTile(
+            leading: NetImage(
+              item.face,
+              width: 48,
+              height: 48,
+              borderRadius: 24,
             ),
-            confirmDismiss: (direction) async {
-              return await Utils.showAlertDialog("确定要删除此记录吗?", title: "删除记录");
-            },
-            onDismissed: (_) {
-              controller.removeItem(item);
-            },
-            child: ListTile(
-              leading: NetImage(
-                item.face,
-                width: 48,
-                height: 48,
-                borderRadius: 24,
-              ),
-              title: Text(item.userName),
-              subtitle: Row(
-                children: [
-                  Expanded(
-                    child: Row(
-                      children: [
-                        Image.asset(
-                          site.logo,
-                          width: 20,
+            title: Text(item.userName),
+            subtitle: Row(
+              children: [
+                Expanded(
+                  child: Row(
+                    children: [
+                      Image.asset(
+                        site.logo,
+                        width: 20,
+                      ),
+                      AppStyle.hGap4,
+                      Text(
+                        site.name,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
                         ),
-                        AppStyle.hGap4,
-                        Text(
-                          site.name,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey,
-                          ),
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
-                  Text(
-                    Utils.parseTime(item.updateTime),
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                ],
-              ),
-              onTap: () {
-                AppNavigator.toLiveRoomDetail(
-                  site: site,
-                  roomId: item.roomId,
-                );
-              },
-              onLongPress: () async {
-                var result =
-                    await Utils.showAlertDialog("确定要删除此记录吗?", title: "删除记录");
-                if (!result) {
-                  return;
-                }
-                controller.removeItem(item);
-              },
+                ),
+                Text(
+                  Utils.parseTime(item.updateTime),
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ],
             ),
-          );
-        },
-      ),
+            onTap: () {
+              AppNavigator.toLiveRoomDetail(
+                site: site,
+                roomId: item.roomId,
+              );
+            },
+            onLongPress: () => _confirmRemove(item),
+          ),
+        );
+      },
     );
   }
 }

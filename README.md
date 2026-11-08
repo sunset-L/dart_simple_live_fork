@@ -1,3 +1,16 @@
+## 本项目fork from [xiaoyaocz/dart_simple_live](https://github.com/xiaoyaocz/dart_simple_live)
+
+## 基于原项目修改部分：
+
+去除了ios支持
+
+去除mpv支持
+
+优化小窗支持，效果如早年z直播，具体效果自行体验，有空再补充具体细节
+
+其他改的太多想不起来就这吧
+
+
 > ### ⚠ 本项目不提供Release安装包，请自行编译后运行测试。
 
 
@@ -74,10 +87,10 @@ Flutter（FVM）: `3.47.1`
 
 ## Star History
 
-<a href="https://www.star-history.com/#xiaoyaocz/dart_simple_live&Date">
+<a href="https://www.star-history.com/?type=date&repos=sunset-L%2Fdart_simple_live_fork">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=xiaoyaocz/dart_simple_live&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=xiaoyaocz/dart_simple_live&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=xiaoyaocz/dart_simple_live&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=sunset-L/dart_simple_live_fork&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=sunset-L/dart_simple_live_fork&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=sunset-L/dart_simple_live_fork&type=date&legend=top-left" />
  </picture>
 </a>

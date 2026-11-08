@@ -55,27 +55,6 @@ class MinePage extends StatelessWidget {
               endIndent: 12,
               color: Colors.grey.withAlpha(25),
             ),
-            _buildCard(
-              context,
-              children: [
-                ListTile(
-                  leading: const Icon(Remix.history_line),
-                  title: const Text("观看记录"),
-                  trailing: const Icon(
-                    Icons.chevron_right,
-                    color: Colors.grey,
-                  ),
-                  onTap: () {
-                    Get.toNamed(RoutePath.kHistory);
-                  },
-                ),
-              ],
-            ),
-            Divider(
-              indent: 12,
-              endIndent: 12,
-              color: Colors.grey.withAlpha(25),
-            ),
             ListTile(
               leading: const Icon(Remix.account_circle_line),
               title: const Text("账号管理"),

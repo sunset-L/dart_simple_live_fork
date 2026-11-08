@@ -9,6 +9,7 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/follow_user_tag.dart';
 import 'package:simple_live_app/modules/follow_user/follow_user_controller.dart';
+import 'package:simple_live_app/modules/mine/history/history_page.dart';
 import 'package:simple_live_app/routes/app_navigation.dart';
 import 'package:simple_live_app/services/follow_service.dart';
 import 'package:simple_live_app/widgets/filter_button.dart';
@@ -28,100 +29,111 @@ class FollowUserPage extends GetView<FollowUserController> {
       appBar: AppBar(
         title: const Text("关注用户"),
         actions: [
-          PopupMenuButton(
-            itemBuilder: (context) {
-              return const [
-                PopupMenuItem(
-                  value: 0,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Remix.save_2_line),
-                      AppStyle.hGap12,
-                      Text("导出文件")
-                    ],
+          Obx(() {
+            if (controller.isHistorySelected) {
+              return TextButton.icon(
+                onPressed: controller.historyController.clean,
+                icon: const Icon(Icons.delete_outline),
+                label: const Text("清空"),
+              );
+            }
+            return PopupMenuButton(
+              itemBuilder: (context) {
+                return const [
+                  PopupMenuItem(
+                    value: 0,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Remix.save_2_line),
+                        AppStyle.hGap12,
+                        Text("导出文件")
+                      ],
+                    ),
                   ),
-                ),
-                PopupMenuItem(
-                  value: 1,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Remix.folder_open_line),
-                      AppStyle.hGap12,
-                      Text("导入文件")
-                    ],
+                  PopupMenuItem(
+                    value: 1,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Remix.folder_open_line),
+                        AppStyle.hGap12,
+                        Text("导入文件")
+                      ],
+                    ),
                   ),
-                ),
-                PopupMenuItem(
-                  value: 2,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Remix.text),
-                      AppStyle.hGap12,
-                      Text("导出文本"),
-                    ],
+                  PopupMenuItem(
+                    value: 2,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Remix.text),
+                        AppStyle.hGap12,
+                        Text("导出文本"),
+                      ],
+                    ),
                   ),
-                ),
-                PopupMenuItem(
-                  value: 3,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Remix.file_text_line),
-                      AppStyle.hGap12,
-                      Text("导入文本"),
-                    ],
+                  PopupMenuItem(
+                    value: 3,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Remix.file_text_line),
+                        AppStyle.hGap12,
+                        Text("导入文本"),
+                      ],
+                    ),
                   ),
-                ),
-                PopupMenuItem(
-                  value: 4,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Remix.price_tag_line),
-                      AppStyle.hGap12,
-                      Text("标签管理"),
-                    ],
+                  PopupMenuItem(
+                    value: 4,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Remix.price_tag_line),
+                        AppStyle.hGap12,
+                        Text("标签管理"),
+                      ],
+                    ),
                   ),
-                ),
-              ];
-            },
-            onSelected: (value) {
-              if (value == 0) {
-                FollowService.instance.exportFile();
-              } else if (value == 1) {
-                FollowService.instance.inputFile();
-              } else if (value == 2) {
-                FollowService.instance.exportText();
-              } else if (value == 3) {
-                FollowService.instance.inputText();
-              } else if (value == 4) {
-                showTagsManager();
-              }
-            },
-          ),
+                ];
+              },
+              onSelected: (value) {
+                if (value == 0) {
+                  FollowService.instance.exportFile();
+                } else if (value == 1) {
+                  FollowService.instance.inputFile();
+                } else if (value == 2) {
+                  FollowService.instance.exportText();
+                } else if (value == 3) {
+                  FollowService.instance.inputText();
+                } else if (value == 4) {
+                  showTagsManager();
+                }
+              },
+            );
+          }),
         ],
-        leading: Obx(
-          () => FollowService.instance.updating.value
+        leading: Obx(() {
+          if (controller.isHistorySelected) {
+            return IconButton(
+              onPressed: controller.historyController.refreshData,
+              icon: const Icon(Icons.refresh),
+            );
+          }
+          return FollowService.instance.updating.value
               ? const IconButton(
                   onPressed: null,
                   icon: SizedBox(
                     width: 16,
                     height: 16,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                    ),
+                    child: CircularProgressIndicator(strokeWidth: 2),
                   ),
                 )
               : IconButton(
-                  onPressed: () {
-                    controller.refreshData();
-                  },
+                  onPressed: controller.refreshData,
                   icon: const Icon(Icons.refresh),
-                ),
-        ),
+                );
+        }),
       ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -136,7 +148,7 @@ class FollowUserPage extends GetView<FollowUserController> {
                       scrollDirection: Axis.horizontal,
                       child: Wrap(
                           spacing: 12,
-                          children: controller.tagList.map((option) {
+                          children: controller.pageTags.map((option) {
                             final selected =
                                 controller.filterMode.value.id == option.id;
                             return Builder(
@@ -188,7 +200,7 @@ class FollowUserPage extends GetView<FollowUserController> {
           ),
           Expanded(
             child: Obx(() {
-              final tags = controller.tagList.toList();
+              final tags = controller.pageTags;
               return NotificationListener<ScrollStartNotification>(
                 onNotification: (notification) {
                   if (notification.metrics.axis == Axis.horizontal &&
@@ -213,6 +225,12 @@ class FollowUserPage extends GetView<FollowUserController> {
                   },
                   itemBuilder: (_, index) {
                     final tag = tags[index];
+                    if (tag.id == controller.historyTag.id) {
+                      return HistoryContent(
+                        key: ValueKey('follow-tag-page-${tag.id}'),
+                        controller: controller.historyController,
+                      );
+                    }
                     return _FollowTagPage(
                       key: ValueKey('follow-tag-page-${tag.id}'),
                       controller: controller,
