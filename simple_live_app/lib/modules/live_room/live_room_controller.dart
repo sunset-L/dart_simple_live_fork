@@ -839,7 +839,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         selection.matches(urls[selection.index])) {
       return selection.index;
     }
-    return urls.indexWhere(selection.matches);
+    final matchedIndex = urls.indexWhere(selection.matches);
+    return matchedIndex >= 0 ? matchedIndex : 0;
   }
 
   void changePlayQuality(int index) {
