@@ -26,10 +26,27 @@ class LiveRoomLayout extends StatefulWidget {
 class _LiveRoomLayoutState extends State<LiveRoomLayout> {
   Size? _inlineSize;
   Orientation? _inlineOrientation;
+  bool _restoringInlineOrientation = false;
+
+  @override
+  void didUpdateWidget(covariant LiveRoomLayout oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.fullScreen && !widget.fullScreen) {
+      _restoringInlineOrientation = _inlineOrientation != null;
+    } else if (widget.fullScreen) {
+      _restoringInlineOrientation = false;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final orientation = MediaQuery.orientationOf(context);
+    if (_restoringInlineOrientation && orientation == _inlineOrientation) {
+      _restoringInlineOrientation = false;
+    }
+    // 厂商小窗可能在退出全屏后继续上报横向尺寸，不能覆盖进入前的布局方向。
+    final layoutOrientation =
+        _restoringInlineOrientation ? _inlineOrientation! : orientation;
     return Column(
       children: [
         Expanded(
@@ -38,7 +55,7 @@ class _LiveRoomLayoutState extends State<LiveRoomLayout> {
               final size = constraints.biggest;
               if (!widget.fullScreen) {
                 _inlineSize = size;
-                _inlineOrientation = orientation;
+                _inlineOrientation = layoutOrientation;
               }
               final inlineOrientation = _inlineOrientation ?? orientation;
               final portrait = inlineOrientation == Orientation.portrait;
@@ -57,8 +74,14 @@ class _LiveRoomLayoutState extends State<LiveRoomLayout> {
                   : math.min(300.0, inlineSize.width);
               final playerWidth =
                   portrait ? inlineSize.width : inlineSize.width - sidebarWidth;
-              final playerHeight =
-                  portrait ? inlineSize.width * 9 / 16 : inlineSize.height;
+              final playerHeight = portrait
+                  ? (_restoringInlineOrientation
+                      ? math.min(
+                          inlineSize.width * 9 / 16,
+                          inlineSize.height / 2,
+                        )
+                      : inlineSize.width * 9 / 16)
+                  : inlineSize.height;
               final sidebarTop = portrait ? playerHeight : 0.0;
 
               return Stack(
@@ -98,7 +121,7 @@ class _LiveRoomLayoutState extends State<LiveRoomLayout> {
             enabled: !widget.fullScreen,
             child: ExcludeFocus(
               excluding: widget.fullScreen,
-              child: orientation == Orientation.portrait
+              child: layoutOrientation == Orientation.portrait
                   ? widget.portraitActions
                   : widget.landscapeActions,
             ),

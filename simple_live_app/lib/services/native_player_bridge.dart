@@ -443,7 +443,9 @@ class NativePlayerBridge {
   /// 所以它们可以。这里绕到原生直接下发 SENSOR 常量。
   ///
   /// - `landscape`：横屏内容全屏用（SENSOR_LANDSCAPE，左右由传感器决定）
-  /// - `auto`：非全屏 / 竖屏内容用（FULL_USER，四向跟随手机）
+  /// - `portrait`：竖屏内容全屏用（PORTRAIT，锁定竖屏）
+  /// - `auto`：退出全屏时恢复进入前的方向策略
+  /// 退出时先恢复原窗口方向，再恢复原方向策略，兼容系统应用小窗。
   Future<void> setScreenOrientation(String mode) async {
     try {
       await _method.invokeMethod("setScreenOrientation", mode);

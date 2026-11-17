@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
@@ -14,6 +15,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.view.Surface
+import android.view.ViewTreeObserver
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
@@ -127,6 +129,12 @@ class NativePlayerManager private constructor() {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var floatingWindow: FloatingPlayerWindow? = null
+
+    /** 方向策略和实际窗口方向分别保存；恢复策略本身不保证厂商小窗转回原方向。 */
+    private var orientationBeforeFullscreen: Int? = null
+    private var windowOrientationBeforeFullscreen: Int? = null
+    private var orientationRestoreListener: ViewTreeObserver.OnPreDrawListener? = null
+    private var orientationRestoreTimeout: Runnable? = null
 
     /** 悬浮窗是否显示中 */
     var isFloating: Boolean = false
@@ -247,6 +255,9 @@ class NativePlayerManager private constructor() {
     // ---------------------------------------------------------------- 初始化
 
     fun attach(activity: Activity, engine: FlutterEngine) {
+        if (this.activity !== activity) {
+            clearOrientationRestore()
+        }
         this.activity = activity
         this.appContext = activity.applicationContext
 
@@ -340,6 +351,7 @@ class NativePlayerManager private constructor() {
      * pendingFloatingTap，等新引擎的 Dart 侧订阅时补发。
      */
     fun detachActivity() {
+        clearOrientationRestore()
         activity = null
     }
 
@@ -413,6 +425,39 @@ class NativePlayerManager private constructor() {
         Log.d(TAG, "app returned to foreground, resumed playback")
     }
 
+    private fun windowOrientation(act: Activity): Int {
+        val view = act.window.decorView
+        if (view.width > 0 && view.height > 0) {
+            return if (view.width > view.height) {
+                Configuration.ORIENTATION_LANDSCAPE
+            } else {
+                Configuration.ORIENTATION_PORTRAIT
+            }
+        }
+        return act.resources.configuration.orientation
+    }
+
+    private fun clearOrientationRestore() {
+        orientationRestoreListener?.let { listener ->
+            activity?.window?.decorView?.viewTreeObserver?.let { observer ->
+                if (observer.isAlive) observer.removeOnPreDrawListener(listener)
+            }
+        }
+        orientationRestoreTimeout?.let { mainHandler.removeCallbacks(it) }
+        orientationRestoreListener = null
+        orientationRestoreTimeout = null
+        orientationBeforeFullscreen = null
+        windowOrientationBeforeFullscreen = null
+    }
+
+    private fun finishOrientationRestore(act: Activity) {
+        val requested = orientationBeforeFullscreen ?: return
+        clearOrientationRestore()
+        if (activity === act && act.requestedOrientation != requested) {
+            act.requestedOrientation = requested
+        }
+    }
+
     /**
      * 设置屏幕方向，绕开 Flutter 的方向映射表。
      *
@@ -436,29 +481,63 @@ class NativePlayerManager private constructor() {
      *                锁死竖屏，转手机也不动（「竖屏不处理」）。
      *                必须显式锁，否则上一次看横屏流残留的 SENSOR_LANDSCAPE
      *                会把竖屏内容强行掰成横屏。
-     *  - "auto"      非全屏 / 退出播放器：SCREEN_ORIENTATION_USER
-     *                「用户偏好的方向」，即**尊重系统的自动旋转开关**。
-     *
-     * 【为什么 "auto" 不用 FULL_USER / SENSOR】
-     * 那两个都会无视系统旋转锁，等于把用户在系统里关掉的自动旋转强行打开，
-     * 整个 App 都会跟着乱转。只能在播放器全屏那一段用 SENSOR，
-     * 回到普通页面必须还给系统决定。
+     *  - "auto"      非全屏 / 退出播放器：恢复进入全屏前的方向策略。
+     *                先恢复实际窗口方向，再恢复策略，避免厂商小窗保留全屏横向尺寸。
      */
     fun setScreenOrientation(mode: String?) {
         val act = activity ?: return
-        val orientation = when (mode) {
-            "landscape" -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            "portrait" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            // "auto" 与未知值都回落到「尊重系统自动旋转」
-            else -> ActivityInfo.SCREEN_ORIENTATION_USER
-        }
-        if (act.requestedOrientation == orientation) {
+        if (mode == "landscape" || mode == "portrait") {
+            val requested = orientationBeforeFullscreen
+            val savedWindowOrientation = windowOrientationBeforeFullscreen
+            clearOrientationRestore()
+            if (requested == null) {
+                orientationBeforeFullscreen = act.requestedOrientation
+                windowOrientationBeforeFullscreen = windowOrientation(act)
+            } else {
+                orientationBeforeFullscreen = requested
+                windowOrientationBeforeFullscreen = savedWindowOrientation
+            }
+            act.requestedOrientation = if (mode == "landscape") {
+                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            } else {
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            }
             return
         }
-        // setRequestedOrientation 必须在主线程；
-        // Dart 侧调用经由 MethodChannel 默认就在主线程，这里无需再 post。
-        act.requestedOrientation = orientation
-        Log.d(TAG, "setScreenOrientation: $mode -> $orientation")
+        val target = windowOrientationBeforeFullscreen ?: return
+        if (orientationRestoreListener != null) return
+        if (windowOrientation(act) == target) {
+            finishOrientationRestore(act)
+            return
+        }
+        val view = act.window.decorView
+        val listener = ViewTreeObserver.OnPreDrawListener {
+            if (activity === act && windowOrientation(act) == target) {
+                val pendingRestore = orientationRestoreListener
+                // 下一帧再还原策略，先让 Flutter 收到恢复后的窗口尺寸。
+                view.post {
+                    if (activity === act &&
+                        pendingRestore != null &&
+                        orientationRestoreListener === pendingRestore
+                    ) {
+                        finishOrientationRestore(act)
+                    }
+                }
+            }
+            true
+        }
+        orientationRestoreListener = listener
+        view.viewTreeObserver.addOnPreDrawListener(listener)
+        // 系统可以忽略方向请求，不能因此永久锁住用户后续的旋转。
+        orientationRestoreTimeout = Runnable {
+            if (activity === act) finishOrientationRestore(act)
+        }.also { mainHandler.postDelayed(it, 2000L) }
+        act.requestedOrientation = if (target == Configuration.ORIENTATION_LANDSCAPE) {
+            ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+        Log.d(TAG, "restore window orientation: $target")
     }
 
     /** 引擎已销毁：把所有与引擎绑定的引用清空 */

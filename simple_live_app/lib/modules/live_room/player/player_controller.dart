@@ -563,11 +563,10 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     await nativePlayer.setScreenOrientation("portrait");
   }
 
-  /// 恢复「跟随系统自动旋转」的方向策略
+  /// 恢复进入全屏前的方向策略
   ///
-  /// 非全屏页面、退出播放器时都调这个。用 `USER`
-  /// 而不是 SENSOR/FULL_USER：必须尊重用户在系统里设的自动旋转开关，
-  /// 不能把普通页面的方向也强行交给传感器。
+  /// 非全屏页面、退出播放器时都调这个，由原生侧恢复保存的策略。
+  /// 原生侧先恢复实际窗口方向，再释放全屏方向限制。
   Future setAutoOrientation() async {
     await nativePlayer.setScreenOrientation("auto");
   }
