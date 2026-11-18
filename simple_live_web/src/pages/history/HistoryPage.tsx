@@ -1,11 +1,11 @@
-import { Trash2, Heart } from "lucide-react";
-import { Picture, Empty } from "../../features/catalog/Catalog";
+import { Trash2 } from "lucide-react";
+import { Empty } from "../../features/catalog/Catalog";
 import {
-  platforms,
   type Library,
   type History,
 } from "../../services/libraryData";
-import { openPlayback } from "../../app/routes";
+import { LiveCard } from "../../components/LiveCard";
+import { useFollowStatus } from "../../features/follow/useFollowStatus";
 
 export function HistoryPage({
   data,
@@ -18,6 +18,7 @@ export function HistoryPage({
   onRemove: (id: string) => void;
   onClear: () => void;
 }) {
+  const { statuses } = useFollowStatus(data.histories);
   return (
     <div className="follow-content">
       <div className="content-heading">
@@ -30,47 +31,27 @@ export function HistoryPage({
         )}
       </div>
       {data.histories.length ? (
-        <div className="follow-grid">
+        <div className="live-card-grid">
           {[...data.histories]
             .sort((a, b) => Date.parse(b.updateTime) - Date.parse(a.updateTime))
             .map((item) => {
               const followed = data.follows.some((user) => user.id === item.id);
+              const state = statuses[item.id];
               return (
-                <article className="follow-card" key={item.id}>
-                  <Picture src={item.face} />
-                  <div className="follow-info">
-                    <button
-                      className="room-link"
-                      onClick={() => openPlayback(item.siteId, item.roomId)}
-                    >
-                      {item.userName}
-                    </button>
-                    <span>
-                      {platforms.find((platform) => platform.id === item.siteId)
-                        ?.name ?? item.siteId}
-                    </span>
-                    <small>
-                      {new Date(item.updateTime).toLocaleString("zh-CN")}
-                    </small>
-                  </div>
-                  <button
-                    title={followed ? "取消关注" : "添加关注"}
-                    aria-label={followed ? "取消关注" : "添加关注"}
-                    onClick={() => onFollow(item)}
-                  >
-                    <Heart
-                      size={16}
-                      fill={followed ? "currentColor" : "none"}
-                    />
-                  </button>
-                  <button
-                    title="删除记录"
-                    aria-label="删除记录"
-                    onClick={() => onRemove(item.id)}
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </article>
+                <LiveCard
+                  key={item.id}
+                  {...item}
+                  face={state?.face || item.face}
+                  cover={state?.cover}
+                  title={state?.title}
+                  online={state?.online}
+                  status={state?.status}
+                  statusError={state?.error}
+                  time={item.updateTime}
+                  followed={followed}
+                  onFollow={() => onFollow(item)}
+                  onRemove={() => onRemove(item.id)}
+                />
               );
             })}
         </div>

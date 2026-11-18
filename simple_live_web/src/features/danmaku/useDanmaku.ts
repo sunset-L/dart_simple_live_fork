@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { playbackApi } from "../../services/playbackApi";
 import type { DanmakuMessage, DanmakuStatus } from "../../types/playback";
+import { normalizeDanmakuColor } from "./color";
 
 export function useDanmaku(site: string, room: string, enabled: boolean) {
   const [messages, setMessages] = useState<DanmakuMessage[]>([]);
@@ -42,7 +43,11 @@ export function useDanmaku(site: string, room: string, enabled: boolean) {
               typeof item.message === "string" &&
               typeof item.userName === "string"
             )
-              chats.push({ ...item, id: ++serial.current });
+              chats.push({
+                ...item,
+                color: normalizeDanmakuColor(item.color),
+                id: ++serial.current,
+              });
           }
           if (chats.length)
             setMessages((previous) => [...previous, ...chats].slice(-300));

@@ -38,6 +38,34 @@ export function PlayerSettings({
           onChange={(event) => onChange({ fortune: event.target.checked })}
         />
       </label>
+      <div className="danmaku-color-setting">
+        <span>弹幕颜色</span>
+        <div className="segmented" role="group" aria-label="弹幕颜色">
+          {[
+            ["original", "原色"],
+            ["white", "白色"],
+            ["custom", "自定义"],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              className={value.colorMode === id ? "selected" : ""}
+              aria-pressed={value.colorMode === id}
+              onClick={() => onChange({ colorMode: id })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {value.colorMode === "custom" && (
+          <input
+            type="color"
+            title="自定义弹幕颜色"
+            aria-label="自定义弹幕颜色"
+            value={value.customColor}
+            onChange={(event) => onChange({ customColor: event.target.value })}
+          />
+        )}
+      </div>
       {fields.map(([key, label, min, max, step]) => (
         <label key={key}>
           <span>

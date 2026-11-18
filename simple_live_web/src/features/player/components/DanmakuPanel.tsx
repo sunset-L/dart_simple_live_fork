@@ -1,6 +1,7 @@
 import { RefreshCw, Wifi, WifiOff } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { DanmakuMessage, DanmakuStatus } from "../../../types/playback";
+import { normalizeDanmakuColor } from "../../danmaku/color";
 export function DanmakuPanel({
   messages,
   status,
@@ -53,10 +54,12 @@ export function DanmakuPanel({
         {messages.length ? (
           messages.map((message) => (
             <div className="chat-line" key={message.id}>
-              <strong style={{ color: message.color }}>
-                {message.userName}
+              <strong title={message.userName}>
+                {message.userName}:
               </strong>
-              <span>{message.message}</span>
+              <span style={{ color: normalizeDanmakuColor(message.color) }}>
+                {message.message}
+              </span>
             </div>
           ))
         ) : (

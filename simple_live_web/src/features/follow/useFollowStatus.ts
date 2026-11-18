@@ -1,24 +1,39 @@
-import { useEffect, useState } from "react";
-import { get } from "../../services/apiClient";
+import { useEffect, useRef, useState } from "react";
+import { updateFollowAvatars } from "../../stores/libraryStorage";
+import { needsFollowAvatar, readFollowRoom, type FollowRoomState } from "./profile";
 import type { Follow } from "../../types/library";
 
-export interface FollowStatus {
+export interface FollowStatus extends Omit<FollowRoomState, "status"> {
   status: boolean | null;
   error?: string;
 }
 
-export function useFollowStatus(follows: Follow[], enabled = true) {
+interface RefreshResult {
+  total: number;
+  failed: number;
+}
+
+export function useFollowStatus(
+  follows: Pick<Follow, "id" | "siteId" | "roomId">[],
+  enabled = true,
+) {
   const [statuses, setStatuses] = useState<Record<string, FollowStatus>>({});
   const [loading, setLoading] = useState(false);
   const [version, setVersion] = useState(0);
+  const manualRefresh = useRef<((result: RefreshResult) => void) | undefined>(
+    undefined,
+  );
   const rooms = JSON.stringify(
     follows.map(({ id, siteId, roomId }) => ({ id, siteId, roomId })),
   );
   useEffect(() => {
     if (!enabled) return;
+    let onComplete = manualRefresh.current;
+    manualRefresh.current = undefined;
     const items = JSON.parse(rooms) as Pick<Follow, "id" | "siteId" | "roomId">[];
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let animationTimer: ReturnType<typeof setTimeout> | undefined;
     let running = false;
     async function refresh() {
       if (
@@ -28,26 +43,37 @@ export function useFollowStatus(follows: Follow[], enabled = true) {
       )
         return;
       running = true;
+      const started = performance.now();
       clearTimeout(timer);
       setLoading(items.length > 0);
-      setStatuses({});
+      setStatuses((previous) =>
+        Object.fromEntries(
+          items
+            .filter((item) => previous[item.id])
+            .map((item) => [item.id, previous[item.id]]),
+        ),
+      );
       let index = 0;
+      let failed = 0;
+      const avatars: { id: string; face: string }[] = [];
       async function worker() {
         while (index < items.length && !controller.signal.aborted) {
           const item = items[index++];
           let result: FollowStatus;
           try {
-            const value = await get<{ status: boolean }>(
-              `live-status?${new URLSearchParams({
-                site: item.siteId,
-                roomId: item.roomId,
-              })}`,
+            const value = await readFollowRoom(
+              item.siteId,
+              item.roomId,
+              true,
               controller.signal,
             );
             if (typeof value.status !== "boolean")
               throw new Error("开播状态数据无效");
-            result = { status: value.status };
+            result = value;
+            if (value.face && !needsFollowAvatar(value.face))
+              avatars.push({ id: item.id, face: value.face });
           } catch (error) {
+            failed++;
             result = {
               status: null,
               error: error instanceof Error ? error.message : "开播状态查询失败",
@@ -60,10 +86,21 @@ export function useFollowStatus(follows: Follow[], enabled = true) {
       await Promise.all(
         Array.from({ length: Math.min(4, items.length) }, () => worker()),
       );
-      running = false;
       if (!controller.signal.aborted) {
-        setLoading(false);
-        timer = setTimeout(() => void refresh(), 60000);
+        if (avatars.length) void updateFollowAvatars(avatars);
+        const complete = () => {
+          if (controller.signal.aborted) return;
+          running = false;
+          setLoading(false);
+          onComplete?.({ total: items.length, failed });
+          onComplete = undefined;
+          timer = setTimeout(() => void refresh(), 60000);
+        };
+        const remaining = items.length
+          ? Math.max(0, 600 - (performance.now() - started))
+          : 0;
+        if (remaining) animationTimer = setTimeout(complete, remaining);
+        else complete();
       }
     }
     const visible = () => {
@@ -74,12 +111,18 @@ export function useFollowStatus(follows: Follow[], enabled = true) {
     return () => {
       controller.abort();
       clearTimeout(timer);
+      clearTimeout(animationTimer);
       document.removeEventListener("visibilitychange", visible);
     };
   }, [rooms, enabled, version]);
   return {
     statuses,
     loading,
-    refresh: () => setVersion((value) => value + 1),
+    refresh: (onComplete?: (result: RefreshResult) => void) => {
+      if (!enabled || loading) return;
+      manualRefresh.current = onComplete;
+      setLoading(follows.length > 0);
+      setVersion((value) => value + 1);
+    },
   };
 }

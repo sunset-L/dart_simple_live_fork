@@ -19,6 +19,8 @@ let writing = false;
 let legacyCorrupt = false;
 let initializing: Promise<void> | undefined;
 let refreshing: Promise<void> | undefined;
+const avatarUpdates = new Map<string, string>();
+let flushingAvatars = false;
 
 interface StoredLibrary {
   revision: string;
@@ -278,11 +280,48 @@ export async function saveLibrary(data: Library) {
     throw error;
   } finally {
     writing = false;
+    void flushFollowAvatars();
   }
 }
 
 export function rawLibrary(): string {
   return raw;
+}
+
+export async function updateFollowAvatars(
+  values: { id: string; face: string }[],
+) {
+  for (const value of values) avatarUpdates.set(value.id, value.face);
+  await flushFollowAvatars();
+}
+
+async function flushFollowAvatars() {
+  if (
+    flushingAvatars ||
+    writing ||
+    !ready ||
+    cached.error ||
+    !avatarUpdates.size
+  )
+    return;
+  flushingAvatars = true;
+  const updates = new Map(avatarUpdates);
+  try {
+    let changed = false;
+    const follows = cached.data.follows.map((item) => {
+      const face = updates.get(item.id);
+      if (!face || face === item.face) return item;
+      changed = true;
+      return { ...item, face };
+    });
+    if (changed) await saveLibrary({ ...cached.data, follows });
+    for (const [id, face] of updates)
+      if (avatarUpdates.get(id) === face) avatarUpdates.delete(id);
+  } catch {
+    // Keep patches for the next reload if another page changed the library.
+  } finally {
+    flushingAvatars = false;
+  }
 }
 
 export async function resetLibrary() {
@@ -307,7 +346,8 @@ export async function resetLibrary() {
 export function watchLibrary(listener: () => void): () => void {
   listeners.add(listener);
   const reload = () => {
-    if (document.visibilityState !== "hidden") void refreshLibrary();
+    if (document.visibilityState !== "hidden")
+      void refreshLibrary().then(flushFollowAvatars);
   };
   const onStorage = (event: StorageEvent) => {
     if (event.key === changeKey) reload();

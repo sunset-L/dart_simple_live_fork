@@ -3,43 +3,20 @@ import {
   ArrowLeft,
   Cloud,
   Compass,
-  Heart,
   LoaderCircle,
   RefreshCw,
 } from "lucide-react";
 import { api } from "../../services/libraryData";
 import {
   platforms,
-  safeImage,
   type Category,
   type CategoryGroup,
   type Follow,
   type Room,
 } from "../../services/libraryData";
-
-export function Picture({
-  src,
-  className,
-  alt = "",
-}: {
-  src?: string | null;
-  className?: string;
-  alt?: string;
-}) {
-  return (
-    <img
-      src={safeImage(src)}
-      className={className}
-      alt={alt}
-      loading="lazy"
-      referrerPolicy="no-referrer"
-      onError={(event) => {
-        if (!event.currentTarget.src.endsWith("/assets/logo.png"))
-          event.currentTarget.src = "/assets/logo.png";
-      }}
-    />
-  );
-}
+import { LiveCard } from "../../components/LiveCard";
+import { Picture } from "../../components/Picture";
+export { Picture } from "../../components/Picture";
 export function Empty({
   title,
   message,
@@ -280,45 +257,22 @@ function Rooms({
   if (loading && !rooms.length) return <Loading />;
   return (
     <>
-      <div className="room-grid">
+      <div className="live-card-grid">
         {rooms.map((room) => {
-          const followed = follows.some(
+          const followed = follows.find(
             (user) => user.id === `${room.siteId}_${room.roomId}`,
           );
           return (
-            <article
-              className="room-card"
+            <LiveCard
               key={`${room.siteId}_${room.roomId}`}
-            >
-              <button
-                className="room-cover"
-                onClick={() => onOpenPlayback(room)}
-                aria-label={`打开 ${room.userName} 的直播间`}
-              >
-                <Picture src={room.cover} />
-                <span className="live-dot">直播中</span>
-                <span className="viewers">
-                  {room.online.toLocaleString("zh-CN")} 人气
-                </span>
-              </button>
-              <div className="room-body">
-                <div className="room-text">
-                  <strong title={room.title}>
-                    {room.title || "未命名直播间"}
-                  </strong>
-                  <span>{room.userName}</span>
-                </div>
-                <button
-                  className={`icon-button ${followed ? "followed" : ""}`}
-                  title={followed ? "取消关注" : "添加关注"}
-                  aria-label={`${followed ? "取消关注" : "关注"} ${room.userName}`}
-                  aria-pressed={followed}
-                  onClick={() => onFollow(room)}
-                >
-                  <Heart size={18} fill={followed ? "currentColor" : "none"} />
-                </button>
-              </div>
-            </article>
+              {...room}
+              face={followed?.face}
+              followed={Boolean(followed)}
+              status={true}
+              showPlatform={false}
+              onFollow={() => onFollow(room)}
+              onOpen={() => onOpenPlayback(room)}
+            />
           );
         })}
       </div>

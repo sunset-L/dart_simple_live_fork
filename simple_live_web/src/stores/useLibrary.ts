@@ -1,11 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
-import { loadLibrary, saveLibrary, watchLibrary } from "./libraryStorage";
+import {
+  loadLibrary,
+  refreshLibrary,
+  saveLibrary,
+  watchLibrary,
+} from "./libraryStorage";
 import type { Library } from "../types/library";
 export function useLibrary() {
   const [data, setData] = useState(() => loadLibrary().data);
   useEffect(() => {
     const reload = () => setData(loadLibrary().data);
-    return watchLibrary(reload);
+    const stop = watchLibrary(reload);
+    reload();
+    void refreshLibrary();
+    return stop;
   }, []);
   const update = useCallback(async (transform: (data: Library) => Library) => {
     const current = loadLibrary();

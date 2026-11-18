@@ -9,6 +9,8 @@ export const defaults = {
   top: 0,
   bottom: 0,
   fortune: false,
+  colorMode: "original",
+  customColor: "#ffffff",
 };
 export type PlayerSettings = typeof defaults;
 const key = "simple-live-web.player.v1";
@@ -36,6 +38,10 @@ export function usePlayerSettings() {
           ? Math.min(max, Math.max(min, result[field]))
           : defaults[field];
       }
+      if (!["original", "white", "custom"].includes(result.colorMode))
+        result.colorMode = defaults.colorMode;
+      if (!/^#[0-9a-f]{6}$/i.test(result.customColor))
+        result.customColor = defaults.customColor;
       return result;
     } catch {
       return defaults;

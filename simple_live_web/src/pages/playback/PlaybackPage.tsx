@@ -2,15 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   Copy,
+  Flame,
   Heart,
   Info,
   Link2,
-  LoaderCircle,
   RefreshCw,
   Share2,
   X,
 } from "lucide-react";
-import { safeImage } from "../../services/media";
 import { openPlayback, playbackUrl } from "../../app/routes";
 import {
   PlayerSurface,
@@ -28,6 +27,8 @@ import { useLibrary } from "../../stores/useLibrary";
 import { useFollowStatus } from "../../features/follow/useFollowStatus";
 import { FollowStatusLabel } from "../../features/follow/FollowStatusLabel";
 import "../../styles/player.css";
+import { Picture } from "../../components/Picture";
+import { platforms } from "../../app/platforms";
 
 export function PlaybackPage({
   site,
@@ -54,7 +55,14 @@ export function PlaybackPage({
   const retries = useRef(0),
     historyWritten = useRef(false);
   const id = `${site}_${roomId}`;
-  const followed = data.follows.some((item) => item.id === id);
+  const roomIds = new Set(
+    [roomId, session.detail?.canonicalRoomId].filter(Boolean),
+  );
+  const matchingFollow = data.follows.find(
+    (item) => item.siteId === site && roomIds.has(item.roomId),
+  );
+  const followed = Boolean(matchingFollow);
+  const platform = platforms.find((item) => item.id === site);
   const filter = useMemo(
     () => createFilter(data.blocked, settings.fortune),
     [data.blocked, settings.fortune],
@@ -87,29 +95,39 @@ export function PlaybackPage({
     perform(async () => {
       if (!session.detail) return;
       const room = session.detail;
-      await update((current) => ({
-        ...current,
-        follows: followed
-          ? current.follows.filter((user) => user.id !== id)
-          : [
-              ...current.follows.filter((user) => user.id !== id),
-              {
-                id,
-                roomId,
-                siteId: site,
-                userName: room.userName,
-                face: room.userAvatar,
-                addTime: new Date().toISOString(),
-                tag: "全部",
-              },
-            ],
-        tags: followed
-          ? current.tags.map((tag) => ({
-              ...tag,
-              userId: tag.userId.filter((user) => user !== id),
-            }))
-          : current.tags,
-      }));
+      let removed = false;
+      await update((current) => {
+        const ids = new Set(
+          current.follows
+            .filter((user) => user.siteId === site && roomIds.has(user.roomId))
+            .map((user) => user.id),
+        );
+        removed = ids.size > 0;
+        return {
+          ...current,
+          follows: removed
+            ? current.follows.filter((user) => !ids.has(user.id))
+            : [
+                ...current.follows,
+                {
+                  id,
+                  roomId,
+                  siteId: site,
+                  userName: room.userName,
+                  face: room.userAvatar,
+                  addTime: new Date().toISOString(),
+                  tag: "全部",
+                },
+              ],
+          tags: removed
+            ? current.tags.map((tag) => ({
+                ...tag,
+                userId: tag.userId.filter((user) => !ids.has(user)),
+              }))
+            : current.tags,
+        };
+      });
+      notify(removed ? "已取消关注" : "已添加关注");
     });
   useEffect(() => {
     if (
@@ -203,6 +221,7 @@ export function PlaybackPage({
           <div className="video-stage">
             <PlayerSurface
               source={session.source}
+              loading={session.loading && !session.source}
               settings={settings}
               messages={messages}
               locked={locked}
@@ -217,14 +236,10 @@ export function PlaybackPage({
               onLine={session.selectLine}
               onSettings={setSettings}
             />
-            {session.loading && !session.source && (
-              <div className="player-loading">
-                <LoaderCircle className="spin" size={30} />
-                <span>正在读取直播信息</span>
-              </div>
-            )}
             {((session.error && !session.source) ||
-              (session.detail && !session.detail.status)) && (
+              (!session.loading &&
+                session.detail &&
+                !session.detail.status)) && (
               <div className="player-error">
                 <Info size={28} />
                 <strong>{session.error || "主播暂未开播"}</strong>
@@ -250,6 +265,29 @@ export function PlaybackPage({
             onLine={session.selectLine}
             onPanel={(next) => setPanel(panel === next ? "chat" : next)}
           />
+          <section className="room-info">
+            <Picture src={session.detail?.userAvatar || matchingFollow?.face} />
+            <div>
+              <strong>{session.detail?.userName ?? "直播间"}</strong>
+              <span>
+                <Flame size={14} />
+                {(chat.online ?? session.detail?.online ?? 0).toLocaleString(
+                  "zh-CN",
+                )}
+                <span className="room-platform">{platform?.name ?? site}</span>
+              </span>
+            </div>
+            <button
+              disabled={!session.detail}
+              className={`icon-button ${followed ? "followed" : ""}`}
+              aria-label={followed ? "取消关注" : "关注"}
+              title={followed ? "取消关注" : "关注"}
+              aria-pressed={followed}
+              onClick={() => void toggleFollow()}
+            >
+              <Heart size={20} fill={followed ? "currentColor" : "none"} />
+            </button>
+          </section>
           <div className="playback-state" role="status">
             {session.switching ? "正在获取新线路" : status}
             {session.error && <span className="error">{session.error}</span>}
@@ -280,27 +318,6 @@ export function PlaybackPage({
           </div>
         </section>
         <aside className="playback-sidebar">
-          <section className="room-info">
-            <img src={safeImage(session.detail?.userAvatar)} alt="" />
-            <div>
-              <strong>{session.detail?.userName ?? roomId}</strong>
-              <span>
-                {(chat.online ?? session.detail?.online ?? 0).toLocaleString(
-                  "zh-CN",
-                )}{" "}
-                人气
-              </span>
-            </div>
-            <button
-              disabled={!session.detail}
-              className="icon-button"
-              aria-label={followed ? "取消关注" : "关注"}
-              title={followed ? "取消关注" : "关注"}
-              onClick={() => void toggleFollow()}
-            >
-              <Heart size={19} fill={followed ? "currentColor" : "none"} />
-            </button>
-          </section>
           <div className="tabs">
             {[
               ["chat", "聊天"],
@@ -360,7 +377,7 @@ export function PlaybackPage({
             </div>
           )}
           {panel === "settings" && (
-            <>
+            <div className="playback-settings-panel">
               <PlayerSettings
                 value={settings}
                 onChange={setSettings}
@@ -407,7 +424,7 @@ export function PlaybackPage({
                   </span>
                 ))}
               </div>
-            </>
+            </div>
           )}
           {panel === "info" && (
             <PlaybackInfo player={handle?.player ?? null} status={status} />

@@ -4,6 +4,7 @@ export type DanmakuStatus =
 
 export interface RoomDetail {
   roomId: string;
+  canonicalRoomId?: string;
   siteId: string;
   title: string;
   cover: string;

@@ -2,19 +2,15 @@ import {
   History as HistoryIcon,
   Plus,
   RefreshCw,
-  Settings,
-  Trash2,
   X,
 } from "lucide-react";
-import { Picture, Empty } from "../../features/catalog/Catalog";
+import { Empty } from "../../features/catalog/Catalog";
 import {
-  platforms,
   type Library,
   type Follow,
 } from "../../services/libraryData";
-import { openPlayback } from "../../app/routes";
 import { useFollowStatus } from "../../features/follow/useFollowStatus";
-import { FollowStatusLabel } from "../../features/follow/FollowStatusLabel";
+import { LiveCard } from "../../components/LiveCard";
 
 export function FollowPage({
   data,
@@ -28,6 +24,7 @@ export function FollowPage({
   onEdit,
   onAdd,
   onHistory,
+  notify,
 }: {
   data: Library;
   following: Follow[];
@@ -40,12 +37,23 @@ export function FollowPage({
   onEdit: (item: Follow) => void;
   onAdd: () => void;
   onHistory: () => void;
+  notify: (message: string) => void;
 }) {
   const tags = [...new Set(["全部", ...data.tags.map((item) => item.tag)])];
-  const { statuses, loading, refresh } = useFollowStatus(following);
+  const { statuses, loading, refresh } = useFollowStatus(data.follows);
   const liveCount = following.filter(
     (item) => statuses[item.id]?.status === true,
   ).length;
+  const visible = following.filter((item) =>
+    filter === "live" ? statuses[item.id]?.status === true
+      : filter === "offline" ? statuses[item.id]?.status === false
+        : true,
+  );
+  if (filter === "all")
+    visible.sort((left, right) =>
+      Number(statuses[right.id]?.status === true) -
+      Number(statuses[left.id]?.status === true),
+    );
   return (
     <div className="follow-content">
       <div className="content-heading">
@@ -59,8 +67,18 @@ export function FollowPage({
           <button
             title="刷新开播状态"
             aria-label="刷新开播状态"
-            disabled={loading || !following.length}
-            onClick={refresh}
+            disabled={loading || !data.follows.length}
+            onClick={() =>
+              refresh(({ total, failed }) =>
+                notify(
+                  failed === 0
+                    ? "刷新成功"
+                    : failed === total
+                      ? "刷新失败，请稍后重试"
+                      : `刷新完成，${failed} 位主播查询失败，请稍后重试`,
+                ),
+              )
+            }
           >
             <RefreshCw size={18} className={loading ? "spin" : ""} />
           </button>
@@ -74,10 +92,11 @@ export function FollowPage({
         </div>
       </div>
       <div className="filter-bar">
-        <div className="tabs" aria-label="平台筛选">
+        <div className="tabs" aria-label="开播状态筛选">
           {[
-            ["all", "全部平台"],
-            ...platforms.map((item) => [item.id, item.name]),
+            ["all", "全部"],
+            ["live", "直播中"],
+            ["offline", "未开播"],
           ].map(([id, label]) => (
             <button
               key={id}
@@ -89,58 +108,46 @@ export function FollowPage({
             </button>
           ))}
         </div>
-        <div className="tag-list">
-          {tags.map((item) => (
-            <button
-              key={item}
-              aria-pressed={tag === item}
-              className={tag === item ? "selected" : ""}
-              onClick={() => setTag(item)}
-            >
-              {item}
-            </button>
-          ))}
-        </div>
-      </div>
-      {following.length ? (
-        <div className="follow-grid">
-          {following.map((item) => (
-            <article className="follow-card" key={item.id}>
-              <Picture src={item.face} />
-              <div className="follow-info">
-                <button
-                  className="room-link"
-                  onClick={() => openPlayback(item.siteId, item.roomId)}
-                >
-                  {item.userName}
-                </button>
-                <span>
-                  {platforms.find((platform) => platform.id === item.siteId)
-                    ?.name ?? item.siteId}{" "}
-                  · {item.tag}
-                </span>
-                <small>房间 {item.roomId}</small>
-                <FollowStatusLabel value={statuses[item.id]} />
-              </div>
+        {data.tags.length > 0 && (
+          <div className="tag-list">
+            {tags.map((item) => (
               <button
-                title="设置标签"
-                aria-label={`设置 ${item.userName} 的标签`}
-                onClick={() => onEdit(item)}
+                key={item}
+                aria-pressed={tag === item}
+                className={tag === item ? "selected" : ""}
+                onClick={() => setTag(item)}
               >
-                <Settings size={16} />
+                {item}
               </button>
-              <button
-                title="取消关注"
-                aria-label={`取消关注 ${item.userName}`}
-                onClick={() => {
+            ))}
+          </div>
+        )}
+      </div>
+      {visible.length ? (
+        <div className="live-card-grid">
+          {visible.map((item) => {
+            const state = statuses[item.id];
+            return (
+              <LiveCard
+                key={item.id}
+                {...item}
+                face={state?.face || item.face}
+                cover={state?.cover}
+                title={state?.title}
+                online={state?.online}
+                status={state?.status}
+                statusError={state?.error}
+                followed={true}
+                onEdit={() => onEdit(item)}
+                onFollow={() => {
                   if (confirm(`取消关注 ${item.userName}？`)) onFollow(item);
                 }}
-              >
-                <Trash2 size={16} />
-              </button>
-            </article>
-          ))}
+              />
+            );
+          })}
         </div>
+      ) : loading && following.length && filter !== "all" ? (
+        <div className="loading" role="status">正在查询开播状态</div>
       ) : (
         <Empty
           title={data.follows.length ? "没有符合条件的关注" : "暂无关注"}

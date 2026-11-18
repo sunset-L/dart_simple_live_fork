@@ -6,12 +6,16 @@ import danmuku, {
 import type { DanmakuMessage, Source, Quality } from "../../../types/playback";
 import type { PlayerSettings } from "../../../stores/playerSettings";
 import { createStreamSession } from "../streamSession";
+import { displayDanmakuColor } from "../../danmaku/color";
+
+Artplayer.FULLSCREEN_WEB_IN_BODY = false;
 
 export interface PlayerHandle {
   player: Artplayer;
 }
 interface Props {
   source: Source | null;
+  loading: boolean;
   settings: PlayerSettings;
   messages: DanmakuMessage[];
   locked: boolean;
@@ -58,7 +62,9 @@ export function PlayerSurface(props: Props) {
       fastForward: false,
       autoOrientation: false,
       playsInline: true,
-      theme: "#3284d9",
+      theme:
+        getComputedStyle(host.current).getPropertyValue("--primary").trim() ||
+        "#3284d9",
       plugins: [
         danmuku({
           danmuku: [],
@@ -70,6 +76,25 @@ export function PlayerSurface(props: Props) {
       ],
     });
     player.current = art;
+    art.loading.show = latest.current.loading;
+    const container = art.template.$player;
+    let clickTimer: ReturnType<typeof setTimeout> | undefined;
+    // Own click handling so a double click never toggles playback or native fullscreen.
+    art.proxy(art.video, "click", (event) => {
+      event.stopImmediatePropagation();
+      if (latest.current.locked || Artplayer.utils.isMobile) return;
+      clearTimeout(clickTimer);
+      clickTimer = setTimeout(() => {
+        if (!latest.current.locked) art.toggle();
+      }, Artplayer.DBCLICK_TIME);
+    }, true);
+    art.proxy(art.video, "dblclick", (event) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      clearTimeout(clickTimer);
+      if (!latest.current.locked && !art.fullscreen)
+        art.fullscreenWeb = !art.fullscreenWeb;
+    }, true);
     renderer.current = art.plugins.artplayerPluginDanmuku as DanmakuRenderer;
     const session = createStreamSession(art.video, {
       sources: () => latest.current.sources,
@@ -86,7 +111,9 @@ export function PlayerSurface(props: Props) {
     const keys = (event: KeyboardEvent) => {
       if (
         latest.current.locked ||
-        event.ctrlKey || event.metaKey || event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey ||
         /INPUT|TEXTAREA|SELECT|BUTTON|A/.test(
           (event.target as HTMLElement)?.tagName ?? "",
         ) ||
@@ -97,7 +124,10 @@ export function PlayerSurface(props: Props) {
         event.preventDefault();
         art.toggle();
       }
-      if (event.code === "KeyF") art.fullscreen = !art.fullscreen;
+      if (event.code === "KeyF" && !art.fullscreen)
+        art.fullscreenWeb = !art.fullscreenWeb;
+      if (event.code === "Escape" && art.fullscreenWeb)
+        art.fullscreenWeb = false;
       if (event.code === "KeyM") art.muted = !art.muted;
     };
     document.addEventListener("keydown", keys);
@@ -122,11 +152,12 @@ export function PlayerSurface(props: Props) {
       "keydown",
     ];
     for (const name of blockedEvents)
-      host.current.addEventListener(name, intercept, true);
-    const container = host.current;
+      container.addEventListener(name, intercept, true);
     latest.current.onReady({ player: art });
     return () => {
       session.destroy();
+      clearTimeout(clickTimer);
+      if (art.fullscreenWeb) art.fullscreenWeb = false;
       for (const name of blockedEvents)
         container.removeEventListener(name, intercept, true);
       document.removeEventListener("keydown", keys);
@@ -141,6 +172,10 @@ export function PlayerSurface(props: Props) {
     if (props.source) load.current(props.source);
     else stop.current();
   }, [props.source]);
+  useEffect(() => {
+    if (!props.source && player.current)
+      player.current.loading.show = props.loading;
+  }, [props.loading, props.source]);
   useEffect(() => {
     const plugin = renderer.current,
       settings = props.settings;
@@ -187,7 +222,11 @@ export function PlayerSurface(props: Props) {
       plugin.emit({
         text: message.message,
         mode: 0,
-        color: /^#[0-9a-f]{6}$/i.test(message.color) ? message.color : "#fff",
+        color: displayDanmakuColor(
+          message.color,
+          props.settings.colorMode,
+          props.settings.customColor,
+        ),
         style: {
           fontWeight: String(props.settings.weight * 100),
           marginBottom: `${props.settings.bottom}px`,

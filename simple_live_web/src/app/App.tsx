@@ -3,17 +3,10 @@ import {
   ArrowLeft,
   ChevronRight,
   Cloud,
-  Compass,
   Download,
-  Grid2X2,
-  Heart,
-  Monitor,
-  Moon,
   RefreshCw,
   Search,
-  Sun,
   Trash2,
-  User,
   X,
 } from "lucide-react";
 import { Catalog } from "../features/catalog/Catalog";
@@ -25,6 +18,12 @@ import { Blocked } from "../pages/blocked/BlockedPage";
 import { TagDialog } from "../features/follow/TagDialog";
 import { AddFollow } from "../features/follow/AddFollow";
 import { openPlayback } from "./routes";
+import { Sidebar } from "./Sidebar";
+import { ThemePicker, themeColors } from "./ThemePicker";
+import {
+  hydrateFollowAvatar,
+  needsFollowAvatar,
+} from "../features/follow/profile";
 const PlaybackPage = lazy(() =>
   import("../pages/playback/PlaybackPage").then((module) => ({
     default: module.PlaybackPage,
@@ -45,12 +44,6 @@ import { refreshLibrary, watchLibrary } from "../stores/libraryStorage";
 
 type Page =
   "home" | "follow" | "category" | "mine" | "sync" | "history" | "blocked";
-const navigation = [
-  { id: "home", label: "首页", icon: Compass },
-  { id: "follow", label: "关注", icon: Heart },
-  { id: "category", label: "分类", icon: Grid2X2 },
-  { id: "mine", label: "我的", icon: User },
-] as const;
 const pageNames: Record<Page, string> = {
   home: "首页",
   follow: "我的关注",
@@ -66,6 +59,7 @@ const validPage = (): Page => {
 };
 export function App() {
   const [page, setPage] = useState<Page>(validPage);
+  const [historyParent, setHistoryParent] = useState<"follow" | "mine">("follow");
   const playbackMatch = location.pathname.match(
     /^\/playback\/(bilibili|douyu|huya|douyin)\/([A-Za-z0-9_-]{1,100})$/,
   );
@@ -84,9 +78,20 @@ export function App() {
   const [filter, setFilter] = useState("all");
   const [theme, setTheme] = useState(() => {
     try {
-      return localStorage.getItem("simple-live-web.theme") ?? "system";
+      const value = localStorage.getItem("simple-live-web.theme");
+      return value && ["system", "light", "dark"].includes(value)
+        ? value
+        : "system";
     } catch {
       return "system";
+    }
+  });
+  const [themeColor, setThemeColor] = useState(() => {
+    try {
+      const value = localStorage.getItem("simple-live-web.theme-color");
+      return themeColors.find((item) => item.id === value)?.id ?? "blue";
+    } catch {
+      return "blue";
     }
   });
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -104,19 +109,33 @@ export function App() {
   }, []);
   useEffect(() => {
     const media = matchMedia("(prefers-color-scheme: dark)");
+    const color =
+      themeColors.find((item) => item.id === themeColor) ?? themeColors[0];
     const apply = () => {
-      document.documentElement.dataset.theme =
+      const mode =
         theme === "system" ? (media.matches ? "dark" : "light") : theme;
+      const root = document.documentElement;
+      root.dataset.theme = mode;
+      root.style.setProperty(
+        "--primary",
+        mode === "dark" ? color.dark : color.light,
+      );
+      root.style.setProperty("--accent-dark", color.dark);
+      root.style.setProperty(
+        "--primary-soft",
+        "color-mix(in srgb, var(--primary) 12%, var(--surface))",
+      );
     };
     apply();
     media.addEventListener("change", apply);
     try {
       localStorage.setItem("simple-live-web.theme", theme);
+      localStorage.setItem("simple-live-web.theme-color", themeColor);
     } catch {
       /* Appearance still works without persistence. */
     }
     return () => media.removeEventListener("change", apply);
-  }, [theme]);
+  }, [theme, themeColor]);
   useEffect(() => {
     const onStorage = () => {
       const loaded = loadLibrary();
@@ -159,6 +178,8 @@ export function App() {
     }
   }
   function go(next: Page) {
+    if (next === "history")
+      setHistoryParent(page === "follow" ? "follow" : "mine");
     location.hash = next;
   }
   function toggleFollow(room: Room | Follow | History) {
@@ -190,6 +211,8 @@ export function App() {
           : current.tags,
       });
       notify(exists ? "已取消关注" : "已添加关注");
+      if (!exists && (!("face" in room) || needsFollowAvatar(room.face)))
+        void hydrateFollowAvatar(room.siteId, room.roomId);
     });
   }
   function saveTag(name: string) {
@@ -224,21 +247,20 @@ export function App() {
   }
   const isCatalog = page === "home" || page === "category";
   const secondary = ["sync", "history", "blocked"].includes(page);
-  const activeNav = secondary ? "mine" : page;
-  const following = data.follows
-    .filter((user) => filter === "all" || user.siteId === filter)
-    .filter(
-      (user) =>
-        tag === "全部" ||
-        user.tag === tag ||
-        data.tags.some(
-          (item) => item.tag === tag && item.userId.includes(user.id),
-        ),
-    );
+  const activeNav = page === "history" ? historyParent : secondary ? "mine" : page;
+  const selectedTag = data.tags.some((item) => item.tag === tag) ? tag : "全部";
+  const following = data.follows.filter(
+    (user) =>
+      selectedTag === "全部" ||
+      user.tag === selectedTag ||
+      data.tags.some(
+        (item) => item.tag === selectedTag && item.userId.includes(user.id),
+      ),
+  );
 
   if (playbackMatch)
     return (
-      <Suspense fallback={<div className="loading">正在加载播放器</div>}>
+      <Suspense fallback={null}>
         <PlaybackPage
           key={`${playbackMatch[1]}:${playbackMatch[2]}`}
           site={playbackMatch[1]}
@@ -248,51 +270,24 @@ export function App() {
     );
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <img src="/assets/logo.png" alt="" />
-          <strong>Simple Live</strong>
-          <span>WEB</span>
-        </div>
-        <nav aria-label="主导航">
-          {navigation.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.id}
-                aria-current={activeNav === item.id ? "page" : undefined}
-                className={activeNav === item.id ? "active" : ""}
-                onClick={() => go(item.id)}
-              >
-                <Icon size={20} />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </nav>
-        <div className="sidebar-foot">
-          <button onClick={() => go("sync")}>
-            <Cloud size={19} />
-            数据同步
-          </button>
-          <button className="profile-mini" onClick={() => go("mine")}>
-            <span className="avatar">
-              <User size={15} />
-            </span>
-            <span>本地数据</span>
-            <ChevronRight size={16} />
-          </button>
-        </div>
-      </aside>
+      <Sidebar activePage={activeNav} onNavigate={go} />
       <main className={`main ${isCatalog ? "has-search" : ""}`}>
         <header className="topbar">
           <div className="crumb">
             {secondary && (
               <button
                 className="icon-button"
-                aria-label="返回我的"
-                title="返回我的"
-                onClick={() => go("mine")}
+                aria-label={
+                  page === "history" && historyParent === "follow"
+                    ? "返回关注"
+                    : "返回我的"
+                }
+                title={
+                  page === "history" && historyParent === "follow"
+                    ? "返回关注"
+                    : "返回我的"
+                }
+                onClick={() => go(page === "history" ? historyParent : "mine")}
               >
                 <ArrowLeft size={18} />
               </button>
@@ -333,28 +328,12 @@ export function App() {
             </form>
           )}
           <div className="top-actions">
-            <button
-              className="icon-button"
-              title="切换主题"
-              aria-label="切换主题"
-              onClick={() =>
-                setTheme(
-                  theme === "dark"
-                    ? "light"
-                    : theme === "light"
-                      ? "system"
-                      : "dark",
-                )
-              }
-            >
-              {theme === "dark" ? (
-                <Moon size={19} />
-              ) : theme === "light" ? (
-                <Sun size={19} />
-              ) : (
-                <Monitor size={19} />
-              )}
-            </button>
+            <ThemePicker
+              theme={theme}
+              setTheme={setTheme}
+              color={themeColor}
+              setColor={setThemeColor}
+            />
             <button
               className="icon-button"
               title="数据同步"
@@ -423,11 +402,12 @@ export function App() {
             following={following}
             filter={filter}
             setFilter={setFilter}
-            tag={tag}
+            tag={selectedTag}
             setTag={setTag}
             onFollow={toggleFollow}
             onAdd={() => setAddFollow(true)}
             onHistory={() => go("history")}
+            notify={notify}
             onRemoveTag={(name) =>
               change(async () => {
                 const current = library.current;
@@ -504,6 +484,7 @@ export function App() {
                 follows: [...library.current.follows, user],
               });
               setAddFollow(false);
+              void hydrateFollowAvatar(user.siteId, user.roomId);
             })
           }
         />
