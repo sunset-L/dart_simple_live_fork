@@ -1,14 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import {
-  ArrowLeft,
-  ChevronRight,
-  Cloud,
-  Download,
-  RefreshCw,
-  Search,
-  Trash2,
-  X,
-} from "lucide-react";
+import { App as AntApp, Button, Input, Tooltip } from "antd";
+import { ArrowLeft, Cloud, Download, RefreshCw, Trash2 } from "lucide-react";
 import { Catalog } from "../features/catalog/Catalog";
 import { Sync } from "../features/sync/Sync";
 import { FollowPage } from "../pages/follow/FollowPage";
@@ -19,7 +11,8 @@ import { TagDialog } from "../features/follow/TagDialog";
 import { AddFollow } from "../features/follow/AddFollow";
 import { openPlayback } from "./routes";
 import { Sidebar } from "./Sidebar";
-import { ThemePicker, themeColors } from "./ThemePicker";
+import { ThemePicker } from "./ThemePicker";
+import { useAppearance } from "./AppearanceProvider";
 import {
   hydrateFollowAvatar,
   needsFollowAvatar,
@@ -58,8 +51,12 @@ const validPage = (): Page => {
   return Object.hasOwn(pageNames, value) ? (value as Page) : "home";
 };
 export function App() {
+  const { mode: theme, setMode: setTheme } = useAppearance();
+  const { message, modal } = AntApp.useApp();
   const [page, setPage] = useState<Page>(validPage);
-  const [historyParent, setHistoryParent] = useState<"follow" | "mine">("follow");
+  const [historyParent, setHistoryParent] = useState<"follow" | "mine">(
+    "follow",
+  );
   const playbackMatch = location.pathname.match(
     /^\/playback\/(bilibili|douyu|huya|douyin)\/([A-Za-z0-9_-]{1,100})$/,
   );
@@ -71,30 +68,10 @@ export function App() {
   );
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState("");
-  const [toast, setToast] = useState("");
   const [editing, setEditing] = useState<Follow | null>(null);
   const [addFollow, setAddFollow] = useState(false);
   const [tag, setTag] = useState("全部");
   const [filter, setFilter] = useState("all");
-  const [theme, setTheme] = useState(() => {
-    try {
-      const value = localStorage.getItem("simple-live-web.theme");
-      return value && ["system", "light", "dark"].includes(value)
-        ? value
-        : "system";
-    } catch {
-      return "system";
-    }
-  });
-  const [themeColor, setThemeColor] = useState(() => {
-    try {
-      const value = localStorage.getItem("simple-live-web.theme-color");
-      return themeColors.find((item) => item.id === value)?.id ?? "blue";
-    } catch {
-      return "blue";
-    }
-  });
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const library = useRef(data);
   library.current = data;
 
@@ -108,35 +85,6 @@ export function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
   useEffect(() => {
-    const media = matchMedia("(prefers-color-scheme: dark)");
-    const color =
-      themeColors.find((item) => item.id === themeColor) ?? themeColors[0];
-    const apply = () => {
-      const mode =
-        theme === "system" ? (media.matches ? "dark" : "light") : theme;
-      const root = document.documentElement;
-      root.dataset.theme = mode;
-      root.style.setProperty(
-        "--primary",
-        mode === "dark" ? color.dark : color.light,
-      );
-      root.style.setProperty("--accent-dark", color.dark);
-      root.style.setProperty(
-        "--primary-soft",
-        "color-mix(in srgb, var(--primary) 12%, var(--surface))",
-      );
-    };
-    apply();
-    media.addEventListener("change", apply);
-    try {
-      localStorage.setItem("simple-live-web.theme", theme);
-      localStorage.setItem("simple-live-web.theme-color", themeColor);
-    } catch {
-      /* Appearance still works without persistence. */
-    }
-    return () => media.removeEventListener("change", apply);
-  }, [theme, themeColor]);
-  useEffect(() => {
     const onStorage = () => {
       const loaded = loadLibrary();
       library.current = loaded.data;
@@ -147,14 +95,15 @@ export function App() {
     const stop = watchLibrary(onStorage);
     return () => {
       stop();
-      clearTimeout(timer.current);
     };
   }, []);
 
-  function notify(message: string) {
-    setToast(message);
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => setToast(""), 5500);
+  function notify(text: string) {
+    void message.open({
+      type: /失败|错误|损坏/.test(text) ? "error" : "success",
+      content: text,
+      duration: 4,
+    });
   }
   async function commit(next: Library, expected?: Library) {
     if (storageError) throw new Error(storageError);
@@ -247,7 +196,8 @@ export function App() {
   }
   const isCatalog = page === "home" || page === "category";
   const secondary = ["sync", "history", "blocked"].includes(page);
-  const activeNav = page === "history" ? historyParent : secondary ? "mine" : page;
+  const activeNav =
+    page === "history" ? historyParent : secondary ? "mine" : page;
   const selectedTag = data.tags.some((item) => item.tag === tag) ? tag : "全部";
   const following = data.follows.filter(
     (user) =>
@@ -275,8 +225,9 @@ export function App() {
         <header className="topbar">
           <div className="crumb">
             {secondary && (
-              <button
-                className="icon-button"
+              <Button
+                type="text"
+                icon={<ArrowLeft size={18} />}
                 aria-label={
                   page === "history" && historyParent === "follow"
                     ? "返回关注"
@@ -288,98 +239,78 @@ export function App() {
                     : "返回我的"
                 }
                 onClick={() => go(page === "history" ? historyParent : "mine")}
-              >
-                <ArrowLeft size={18} />
-              </button>
+              />
             )}
             <span>{pageNames[page]}</span>
           </div>
           {isCatalog && (
-            <form
+            <Input.Search
               className="search"
-              onSubmit={(event) => {
-                event.preventDefault();
-                setSearch(query.trim());
+              value={query}
+              maxLength={100}
+              allowClear
+              onChange={(event) => {
+                setQuery(event.target.value);
+                if (!event.target.value) setSearch("");
               }}
-            >
-              <Search size={17} />
-              <input
-                value={query}
-                maxLength={100}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索直播间或主播"
-                aria-label="搜索直播间或主播"
-              />
-              {query && (
-                <button
-                  type="button"
-                  aria-label="清空搜索"
-                  onClick={() => {
-                    setQuery("");
-                    setSearch("");
-                  }}
-                >
-                  <X size={15} />
-                </button>
-              )}
-              <button type="submit" aria-label="搜索" title="搜索">
-                <ChevronRight size={17} />
-              </button>
-            </form>
+              onSearch={(value) => setSearch(value.trim())}
+              placeholder="搜索直播间或主播"
+              aria-label="搜索直播间或主播"
+            />
           )}
           <div className="top-actions">
-            <ThemePicker
-              theme={theme}
-              setTheme={setTheme}
-              color={themeColor}
-              setColor={setThemeColor}
-            />
-            <button
-              className="icon-button"
-              title="数据同步"
-              aria-label="数据同步"
-              onClick={() => go("sync")}
-            >
-              <Cloud size={19} />
-            </button>
+            <ThemePicker />
+            <Tooltip title="数据同步">
+              <Button
+                type="text"
+                aria-label="数据同步"
+                icon={<Cloud size={19} />}
+                onClick={() => go("sync")}
+              />
+            </Tooltip>
           </div>
         </header>
         {storageError && (
           <div className="alert error">
             <span>{storageError}</span>
-            <button
+            <Button
+              type="text"
               title="重新读取本地数据"
               aria-label="重新读取本地数据"
               onClick={() => void refreshLibrary()}
-            >
-              <RefreshCw size={17} />
-            </button>
+              icon={<RefreshCw size={17} />}
+            />
             {storageCorrupt && (
               <>
-                <button
+                <Button
+                  type="text"
                   title="导出原始数据"
                   onClick={() =>
                     change(() =>
                       download(rawLibrary(), "SimpleLive-recovery.json"),
                     )
                   }
-                >
-                  <Download size={17} />
-                </button>
-                <button
+                  icon={<Download size={17} />}
+                />
+                <Button
+                  type="text"
+                  danger
                   title="清除损坏数据"
                   onClick={() =>
                     change(async () => {
                       if (
-                        !confirm("请确认已导出原始数据。清除后不可撤销，是否继续？")
+                        !(await modal.confirm({
+                          title: "清除损坏数据？",
+                          content: "请确认已导出原始数据，清除后不可撤销。",
+                          okButtonProps: { danger: true },
+                        }))
                       )
                         return;
                       await resetLibrary();
                     })
                   }
-                >
-                  <Trash2 size={17} />
-                </button>
+                  icon={<Trash2 size={17} />}
+                />
               </>
             )}
           </div>
@@ -443,8 +374,7 @@ export function App() {
             }
             onClear={() =>
               change(async () => {
-                if (confirm("清空全部历史记录？"))
-                  await commit({ ...library.current, histories: [] });
+                await commit({ ...library.current, histories: [] });
               })
             }
           />
@@ -488,11 +418,6 @@ export function App() {
             })
           }
         />
-      )}
-      {toast && (
-        <div className="toast" role="status">
-          {toast}
-        </div>
       )}
     </div>
   );

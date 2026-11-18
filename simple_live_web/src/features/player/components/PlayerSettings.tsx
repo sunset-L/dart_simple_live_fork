@@ -1,104 +1,73 @@
 import type { PlayerSettings as Settings } from "../../../stores/playerSettings";
-const fields = [
-  ["opacity", "不透明度", 0.1, 1, 0.1],
+import { Slider, Switch } from "antd";
+export const danmakuFields = [
+  ["opacity", "不透明度", 0.1, 1, 0.05],
   ["size", "字号", 8, 48, 1],
   ["weight", "字体粗细", 1, 9, 1],
   ["duration", "滚动时长（秒）", 1, 10, 1],
   ["area", "显示区域", 0.1, 1, 0.1],
-  ["top", "顶部边距", 0, 48, 4],
-  ["bottom", "底部边距", 0, 48, 4],
 ] as const;
 export function PlayerSettings({
   value,
   onChange,
-  fit,
-  onFit,
 }: {
   value: Settings;
   onChange: (patch: Partial<Settings>) => void;
-  fit: string;
-  onFit: (value: string) => void;
 }) {
   return (
     <section className="player-settings settings-grid">
       <h3>弹幕设置</h3>
-      <label>
-        显示弹幕
-        <input
-          type="checkbox"
+      <div className="danmaku-setting-row">
+        <span>显示弹幕</span>
+        <Switch
+          aria-label="显示弹幕"
           checked={value.enabled}
-          onChange={(event) => onChange({ enabled: event.target.checked })}
+          onChange={(enabled) => onChange({ enabled })}
         />
-      </label>
-      <label>
-        屏蔽福袋和抽奖
-        <input
-          type="checkbox"
-          checked={value.fortune}
-          onChange={(event) => onChange({ fortune: event.target.checked })}
-        />
-      </label>
-      <div className="danmaku-color-setting">
-        <span>弹幕颜色</span>
-        <div className="segmented" role="group" aria-label="弹幕颜色">
-          {[
-            ["original", "原色"],
-            ["white", "白色"],
-            ["custom", "自定义"],
-          ].map(([id, label]) => (
-            <button
-              key={id}
-              className={value.colorMode === id ? "selected" : ""}
-              aria-pressed={value.colorMode === id}
-              onClick={() => onChange({ colorMode: id })}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        {value.colorMode === "custom" && (
-          <input
-            type="color"
-            title="自定义弹幕颜色"
-            aria-label="自定义弹幕颜色"
-            value={value.customColor}
-            onChange={(event) => onChange({ customColor: event.target.value })}
-          />
-        )}
       </div>
-      {fields.map(([key, label, min, max, step]) => (
-        <label key={key}>
+      <div className="danmaku-setting-row">
+        <span>防止弹幕重叠</span>
+        <Switch
+          aria-label="防止弹幕重叠"
+          checked={value.antiOverlap}
+          onChange={(antiOverlap) => onChange({ antiOverlap })}
+        />
+      </div>
+      <div className="danmaku-setting-row">
+        <span>屏蔽福袋和抽奖</span>
+        <Switch
+          aria-label="屏蔽福袋和抽奖"
+          checked={value.fortune}
+          onChange={(fortune) => onChange({ fortune })}
+        />
+      </div>
+      {danmakuFields.map(([key, label, min, max, step]) => (
+        <div className="danmaku-slider-row" key={key}>
           <span>
-            {label} · {value[key]}
+            {label} ·{" "}
+            {key === "area" || key === "opacity"
+              ? `${Math.round(value[key] * 100)}%`
+              : value[key]}
           </span>
-          <input
-            type="range"
+          <Slider
+            aria-label={label}
             min={min}
             max={max}
             step={step}
             value={value[key]}
-            onChange={(event) =>
-              onChange({ [key]: Number(event.target.value) })
-            }
+            tooltip={{
+              formatter: (next) =>
+                key === "area" || key === "opacity"
+                  ? `${Math.round((next ?? 0) * 100)}%`
+                  : next,
+              getPopupContainer: (trigger) =>
+                trigger.closest<HTMLElement>(".art-video-player") ??
+                document.body,
+            }}
+            onChange={(next) => onChange({ [key]: next })}
           />
-        </label>
+        </div>
       ))}
-      <label>
-        画面尺寸
-        <select value={fit} onChange={(event) => onFit(event.target.value)}>
-          {[
-            ["contain", "适应"],
-            ["cover", "铺满"],
-            ["stretch", "拉伸"],
-            ["16:9", "16:9"],
-            ["4:3", "4:3"],
-          ].map(([id, text]) => (
-            <option key={id} value={id}>
-              {text}
-            </option>
-          ))}
-        </select>
-      </label>
     </section>
   );
 }

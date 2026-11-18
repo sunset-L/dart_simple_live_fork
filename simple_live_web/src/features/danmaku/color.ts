@@ -6,13 +6,3 @@ export function normalizeDanmakuColor(value: unknown) {
     return `#${[...color.slice(1)].map((part) => part.repeat(2)).join("")}`;
   return "#ffffff";
 }
-
-export function displayDanmakuColor(
-  original: string,
-  mode: string,
-  custom: string,
-) {
-  return mode === "white"
-    ? "#ffffff"
-    : normalizeDanmakuColor(mode === "custom" ? custom : original);
-}

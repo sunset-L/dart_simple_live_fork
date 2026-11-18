@@ -1,5 +1,6 @@
 import { RefreshCw, Wifi, WifiOff } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { Button, Tooltip } from "antd";
 import type { DanmakuMessage, DanmakuStatus } from "../../../types/playback";
 import { normalizeDanmakuColor } from "../../danmaku/color";
 export function DanmakuPanel({
@@ -31,14 +32,14 @@ export function DanmakuPanel({
                 : "未连接"}
           </span>
         </div>
-        <button
-          className="icon-button"
-          title="重连弹幕"
-          aria-label="重连弹幕"
-          onClick={onReconnect}
-        >
-          <RefreshCw size={16} />
-        </button>
+        <Tooltip title="重连弹幕">
+          <Button
+            type="text"
+            aria-label="重连弹幕"
+            onClick={onReconnect}
+            icon={<RefreshCw size={16} />}
+          />
+        </Tooltip>
       </div>
       <div
         ref={list}
@@ -54,9 +55,7 @@ export function DanmakuPanel({
         {messages.length ? (
           messages.map((message) => (
             <div className="chat-line" key={message.id}>
-              <strong title={message.userName}>
-                {message.userName}:
-              </strong>
+              <strong title={message.userName}>{message.userName}:</strong>
               <span style={{ color: normalizeDanmakuColor(message.color) }}>
                 {message.message}
               </span>
@@ -67,9 +66,9 @@ export function DanmakuPanel({
         )}
       </div>
       {!follow && (
-        <button className="quiet-button" onClick={() => setFollow(true)}>
+        <Button type="text" onClick={() => setFollow(true)}>
           回到最新
-        </button>
+        </Button>
       )}
     </section>
   );

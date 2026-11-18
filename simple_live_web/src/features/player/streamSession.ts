@@ -54,7 +54,22 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
         return;
       }
       dispose = cleanup;
-      await video.play();
+      try {
+        await video.play();
+      } catch (error) {
+        if (
+          !stopped &&
+          version === generation &&
+          !video.muted &&
+          error instanceof DOMException &&
+          error.name === "NotAllowedError"
+        ) {
+          video.muted = true;
+          await video.play();
+        } else {
+          throw error;
+        }
+      }
     } catch (error) {
       if (stopped || version !== generation) return;
       if (error instanceof DOMException && error.name === "NotAllowedError") {

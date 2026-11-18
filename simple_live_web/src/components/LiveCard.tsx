@@ -1,18 +1,12 @@
 import { useEffect, useRef, useState } from "react";
+import { App as AntApp, Button, Tooltip } from "antd";
 import { Clock3, Flame, Heart, Settings, Trash2 } from "lucide-react";
 import { platforms } from "../app/platforms";
 import { openPlayback } from "../app/routes";
 import { Picture } from "./Picture";
 import { safeImage } from "../services/media";
 import { readCardProfile, needsFollowAvatar } from "../features/follow/profile";
-
-function heat(value: number) {
-  if (value >= 100000000)
-    return `${(value / 100000000).toLocaleString("zh-CN", { maximumFractionDigits: 1 })}亿`;
-  if (value >= 10000)
-    return `${(value / 10000).toLocaleString("zh-CN", { maximumFractionDigits: 1 })}万`;
-  return Math.max(0, value).toLocaleString("zh-CN");
-}
+import { formatHeat } from "./formatHeat";
 
 export function LiveCard({
   siteId,
@@ -51,6 +45,9 @@ export function LiveCard({
   onRemove?: () => void;
   onOpen?: () => void;
 }) {
+  const { modal } = AntApp.useApp();
+  const followAction = useRef({ followed, onFollow });
+  followAction.current = { followed, onFollow };
   const platform = platforms.find((item) => item.id === siteId);
   const card = useRef<HTMLElement>(null);
   const [avatar, setAvatar] = useState("");
@@ -60,17 +57,20 @@ export function LiveCard({
     setAvatar("");
     if (!needsFollowAvatar(face) || !card.current) return;
     let canceled = false;
-    const observer = new IntersectionObserver((entries) => {
-      if (!entries.some((entry) => entry.isIntersecting)) return;
-      observer.disconnect();
-      void readCardProfile(siteId, roomId)
-        .then((profile) => {
-          if (!canceled && profile.face) setAvatar(profile.face);
-        })
-        .catch(() => {
-          /* Leave the avatar hidden when the platform cannot provide one. */
-        });
-    }, { rootMargin: "100px" });
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        observer.disconnect();
+        void readCardProfile(siteId, roomId)
+          .then((profile) => {
+            if (!canceled && profile.face) setAvatar(profile.face);
+          })
+          .catch(() => {
+            /* Leave the avatar hidden when the platform cannot provide one. */
+          });
+      },
+      { rootMargin: "100px" },
+    );
     observer.observe(card.current);
     return () => {
       canceled = true;
@@ -79,22 +79,36 @@ export function LiveCard({
   }, [siteId, roomId, face]);
 
   const avatarUrl = needsFollowAvatar(face) ? avatar : face;
-  const state = status === false
-    ? "未开播"
-    : status === null
-      ? "查询失败"
-      : status === undefined
-        ? "查询中"
-        : "";
+  const state =
+    status === false
+      ? "未开播"
+      : status === null
+        ? "查询失败"
+        : status === undefined
+          ? "查询中"
+          : "";
   return (
-    <article className="live-card" ref={card}>
+    <article
+      className={`live-card ${status === false ? "is-offline" : ""}`}
+      ref={card}
+    >
       <button
         className="live-card-open"
-        aria-label={`进入 ${userName} 的直播间`}
-        title={statusError || title || userName}
-        onClick={onOpen ?? (() => openPlayback(siteId, roomId))}
+        disabled={status === false}
+        aria-label={
+          status === false ? `${userName} 未开播` : `进入 ${userName} 的直播间`
+        }
+        title={
+          status === false ? "主播未开播" : statusError || title || userName
+        }
+        onClick={() => {
+          if (status !== false)
+            (onOpen ?? (() => openPlayback(siteId, roomId)))();
+        }}
       />
-      <div className={`live-card-cover ${status === false ? "is-offline" : ""}`}>
+      <div
+        className={`live-card-cover ${status === false ? "is-offline" : ""}`}
+      >
         {safeImage(cover) !== "/assets/logo.png" && failedCover !== cover && (
           <Picture
             src={cover}
@@ -104,7 +118,10 @@ export function LiveCard({
         )}
         {state && (
           <div className="live-card-state" title={statusError ?? state}>
-            <span><Clock3 size={16} />{state}</span>
+            <span>
+              <Clock3 size={16} />
+              {state}
+            </span>
           </div>
         )}
         <div className="live-card-overlay">
@@ -117,46 +134,68 @@ export function LiveCard({
             )}
             <span>{userName}</span>
           </div>
-          {status === true && online !== undefined &&
-           Number.isFinite(online) && online >= 0 && (
-            <span className="live-card-heat" title={`热度 ${heat(online)}`}>
-              <Flame size={16} />
-              {heat(online)}
-            </span>
-          )}
+          {status === true &&
+            online !== undefined &&
+            Number.isFinite(online) &&
+            online >= 0 && (
+              <span
+                className="live-card-heat"
+                title={`热度 ${formatHeat(online)}`}
+              >
+                <Flame size={16} />
+                {formatHeat(online)}
+              </span>
+            )}
         </div>
       </div>
       <div className="live-card-body">
         <div className="live-card-heading">
           <strong title={title || userName}>{title || userName}</strong>
           {onEdit && (
-            <button
-              className="icon-button live-card-action"
-              title="设置标签"
-              aria-label={`设置 ${userName} 的标签`}
-              onClick={onEdit}
-            >
-              <Settings size={17} />
-            </button>
+            <Tooltip title="设置标签">
+              <Button
+                type="text"
+                className="live-card-action"
+                aria-label={`设置 ${userName} 的标签`}
+                onClick={onEdit}
+                icon={<Settings size={17} />}
+              />
+            </Tooltip>
           )}
-          <button
-            className={`icon-button live-card-action ${followed ? "followed" : ""}`}
-            title={followed ? "取消关注" : "添加关注"}
-            aria-label={`${followed ? "取消关注" : "关注"} ${userName}`}
-            aria-pressed={followed}
-            onClick={onFollow}
-          >
-            <Heart size={18} fill={followed ? "currentColor" : "none"} />
-          </button>
+          <Tooltip title={followed ? "取消关注" : "添加关注"}>
+            <Button
+              type="text"
+              className={`live-card-action ${followed ? "followed" : ""}`}
+              aria-label={`${followed ? "取消关注" : "关注"} ${userName}`}
+              aria-pressed={followed}
+              onClick={() => {
+                if (!followed) {
+                  onFollow();
+                  return;
+                }
+                modal.confirm({
+                  title: `取消关注 ${userName}？`,
+                  onOk: () => {
+                    if (card.current && followAction.current.followed)
+                      followAction.current.onFollow();
+                  },
+                });
+              }}
+              icon={
+                <Heart size={18} fill={followed ? "currentColor" : "none"} />
+              }
+            />
+          </Tooltip>
           {onRemove && (
-            <button
-              className="icon-button live-card-action"
-              title="删除记录"
-              aria-label={`删除 ${userName} 的历史记录`}
-              onClick={onRemove}
-            >
-              <Trash2 size={17} />
-            </button>
+            <Tooltip title="删除记录">
+              <Button
+                type="text"
+                className="live-card-action"
+                aria-label={`删除 ${userName} 的历史记录`}
+                onClick={onRemove}
+                icon={<Trash2 size={17} />}
+              />
+            </Tooltip>
           )}
         </div>
         {(showPlatform || (tag && tag !== "全部") || time) && (
@@ -167,7 +206,9 @@ export function LiveCard({
                 {platform?.name ?? siteId}
               </span>
             )}
-            {tag && tag !== "全部" && <span className="live-card-tag">{tag}</span>}
+            {tag && tag !== "全部" && (
+              <span className="live-card-tag">{tag}</span>
+            )}
             {time && (
               <time dateTime={time} title="观看时间">
                 {new Date(time).toLocaleString("zh-CN")}

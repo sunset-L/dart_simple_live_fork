@@ -1,9 +1,7 @@
 import { Trash2 } from "lucide-react";
+import { Button, Popconfirm } from "antd";
 import { Empty } from "../../features/catalog/Catalog";
-import {
-  type Library,
-  type History,
-} from "../../services/libraryData";
+import { type Library, type History } from "../../services/libraryData";
 import { LiveCard } from "../../components/LiveCard";
 import { useFollowStatus } from "../../features/follow/useFollowStatus";
 
@@ -24,10 +22,11 @@ export function HistoryPage({
       <div className="content-heading">
         <h1>历史记录</h1>
         {data.histories.length > 0 && (
-          <button className="quiet-button danger-text" onClick={onClear}>
-            <Trash2 size={17} />
-            清空
-          </button>
+          <Popconfirm title="清空全部历史记录？" onConfirm={onClear}>
+            <Button danger icon={<Trash2 size={17} />}>
+              清空
+            </Button>
+          </Popconfirm>
         )}
       </div>
       {data.histories.length ? (

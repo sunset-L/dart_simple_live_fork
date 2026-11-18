@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Shield, Plus, X } from "lucide-react";
+import { Shield, Plus } from "lucide-react";
+import { Button, Input, Tag } from "antd";
 import type { Library } from "../../services/libraryData";
 
 export function Blocked({
@@ -36,32 +37,34 @@ export function Blocked({
           add();
         }}
       >
-        <input
+        <Input
           aria-label="屏蔽词"
           value={value}
           onChange={(event) => setValue(event.target.value)}
           maxLength={100}
           placeholder="添加屏蔽词"
         />
-        <button className="primary" disabled={!value.trim()}>
-          <Plus size={17} />
+        <Button
+          type="primary"
+          htmlType="submit"
+          disabled={!value.trim()}
+          icon={<Plus size={17} />}
+        >
           添加
-        </button>
+        </Button>
       </form>
       <div className="word-list">
         {data.blocked.map((word) => (
-          <span key={word}>
+          <Tag
+            key={word}
+            closable
+            onClose={(event) => {
+              event.preventDefault();
+              void update(data.blocked.filter((item) => item !== word));
+            }}
+          >
             {word}
-            <button
-              title={`移除 ${word}`}
-              aria-label={`移除 ${word}`}
-              onClick={() =>
-                update(data.blocked.filter((item) => item !== word))
-              }
-            >
-              <X size={13} />
-            </button>
-          </span>
+          </Tag>
         ))}
       </div>
     </div>

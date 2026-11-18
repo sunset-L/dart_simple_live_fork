@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
+import { theme } from "antd";
 import Artplayer from "artplayer";
 import danmuku, {
   type Result as DanmakuRenderer,
@@ -6,26 +7,27 @@ import danmuku, {
 import type { DanmakuMessage, Source, Quality } from "../../../types/playback";
 import type { PlayerSettings } from "../../../stores/playerSettings";
 import { createStreamSession } from "../streamSession";
-import { displayDanmakuColor } from "../../danmaku/color";
+import { normalizeDanmakuColor } from "../../danmaku/color";
+import { PlayerControls } from "./PlayerControls";
 
 Artplayer.FULLSCREEN_WEB_IN_BODY = false;
 
-export interface PlayerHandle {
-  player: Artplayer;
-}
 interface Props {
+  danmakuContainer: RefObject<HTMLDivElement | null>;
   source: Source | null;
   loading: boolean;
+  refreshing: boolean;
+  switching: boolean;
   settings: PlayerSettings;
   messages: DanmakuMessage[];
-  locked: boolean;
-  fit: string;
+  status: string;
   qualities: Quality[];
+  quality: Quality | null;
   sources: Source[];
   onQuality: (quality: Quality) => void;
   onLine: (source: Source) => void;
+  onRefresh: () => void;
   onSettings: (settings: Partial<PlayerSettings>) => void;
-  onReady: (handle: PlayerHandle | null) => void;
   onState: (status: string) => void;
   onFailure: (message: string) => void;
   onConfirmed: (source: Source) => void;
@@ -33,6 +35,7 @@ interface Props {
 export function PlayerSurface(props: Props) {
   const host = useRef<HTMLDivElement>(null);
   const player = useRef<Artplayer | null>(null);
+  const [controlPlayer, setControlPlayer] = useState<Artplayer | null>(null);
   const renderer = useRef<DanmakuRenderer | null>(null);
   const latest = useRef(props);
   latest.current = props;
@@ -40,6 +43,7 @@ export function PlayerSurface(props: Props) {
   const stop = useRef<() => void>(() => {});
   const seen = useRef(0);
   const emitted = useRef(0);
+  const { token } = theme.useToken();
   useEffect(() => {
     if (!host.current) return;
     const emitter = document.createElement("div");
@@ -56,7 +60,7 @@ export function PlayerSurface(props: Props) {
       fullscreenWeb: true,
       pip: true,
       hotkey: false,
-      setting: true,
+      setting: false,
       aspectRatio: true,
       gesture: false,
       fastForward: false,
@@ -64,37 +68,72 @@ export function PlayerSurface(props: Props) {
       playsInline: true,
       theme:
         getComputedStyle(host.current).getPropertyValue("--primary").trim() ||
-        "#3284d9",
+        "#1677ff",
       plugins: [
-        danmuku({
-          danmuku: [],
-          emitter: false,
-          mount: emitter,
-          antiOverlap: true,
-          synchronousPlayback: false,
-        }),
+        (art) => {
+          const layer = art.template.$danmuku;
+          layer.classList.add("stage-danmaku");
+          (
+            latest.current.danmakuContainer.current ?? art.template.$player
+          ).append(layer);
+          // Let the renderer measure its own layer while ArtPlayer keeps its video frame.
+          const template = new Proxy(art.template, {
+            get: (target, key) =>
+              key === "$player" ? layer : Reflect.get(target, key, target),
+          });
+          const renderingPlayer = new Proxy(art, {
+            get: (target, key) => {
+              if (key === "template") return template;
+              const value = Reflect.get(target, key, target);
+              return typeof value === "function" && key !== "constructor"
+                ? value.bind(target)
+                : value;
+            },
+          });
+          return danmuku({
+            danmuku: [],
+            emitter: false,
+            mount: emitter,
+            antiOverlap: true,
+            synchronousPlayback: false,
+          })(renderingPlayer);
+        },
       ],
     });
+    const layer = art.template.$danmuku;
+    const positionDanmaku = () => {
+      const container =
+        art.fullscreen || art.fullscreenWeb
+          ? art.template.$player
+          : (latest.current.danmakuContainer.current ?? art.template.$player);
+      if (layer.parentElement !== container) container.append(layer);
+    };
+    art.on("fullscreen", positionDanmaku);
+    art.on("fullscreenWeb", positionDanmaku);
+    positionDanmaku();
     player.current = art;
+    setControlPlayer(art);
     art.loading.show = latest.current.loading;
-    const container = art.template.$player;
-    let clickTimer: ReturnType<typeof setTimeout> | undefined;
-    // Own click handling so a double click never toggles playback or native fullscreen.
-    art.proxy(art.video, "click", (event) => {
-      event.stopImmediatePropagation();
-      if (latest.current.locked || Artplayer.utils.isMobile) return;
-      clearTimeout(clickTimer);
-      clickTimer = setTimeout(() => {
-        if (!latest.current.locked) art.toggle();
-      }, Artplayer.DBCLICK_TIME);
-    }, true);
-    art.proxy(art.video, "dblclick", (event) => {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      clearTimeout(clickTimer);
-      if (!latest.current.locked && !art.fullscreen)
-        art.fullscreenWeb = !art.fullscreenWeb;
-    }, true);
+    // Suppress the library's click-to-pause and double-click native fullscreen.
+    art.proxy(
+      art.video,
+      "click",
+      (event) => {
+        event.stopImmediatePropagation();
+        art.controls.show = true;
+      },
+      true,
+    );
+    art.proxy(
+      art.video,
+      "dblclick",
+      (event) => {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (!art.fullscreen) art.fullscreenWeb = !art.fullscreenWeb;
+      },
+      true,
+    );
     renderer.current = art.plugins.artplayerPluginDanmuku as DanmakuRenderer;
     const session = createStreamSession(art.video, {
       sources: () => latest.current.sources,
@@ -110,7 +149,6 @@ export function PlayerSurface(props: Props) {
     stop.current = session.stop;
     const keys = (event: KeyboardEvent) => {
       if (
-        latest.current.locked ||
         event.ctrlKey ||
         event.metaKey ||
         event.altKey ||
@@ -138,36 +176,23 @@ export function PlayerSurface(props: Props) {
       }
     };
     document.addEventListener("visibilitychange", visibility);
-    const intercept = (event: Event) => {
-      if (latest.current.locked) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-      }
-    };
-    const blockedEvents = [
-      "click",
-      "dblclick",
-      "pointerdown",
-      "contextmenu",
-      "keydown",
-    ];
-    for (const name of blockedEvents)
-      container.addEventListener(name, intercept, true);
-    latest.current.onReady({ player: art });
     return () => {
       session.destroy();
-      clearTimeout(clickTimer);
       if (art.fullscreenWeb) art.fullscreenWeb = false;
-      for (const name of blockedEvents)
-        container.removeEventListener(name, intercept, true);
       document.removeEventListener("keydown", keys);
       document.removeEventListener("visibilitychange", visibility);
       renderer.current = null;
       player.current = null;
-      latest.current.onReady(null);
+      art.off("fullscreen", positionDanmaku);
+      art.off("fullscreenWeb", positionDanmaku);
       art.destroy(false);
+      layer.remove();
     };
   }, []);
+  useEffect(() => {
+    if (player.current && !player.current.isDestroy)
+      player.current.theme = token.colorPrimary;
+  }, [token.colorPrimary, controlPlayer]);
   useEffect(() => {
     if (props.source) load.current(props.source);
     else stop.current();
@@ -188,17 +213,18 @@ export function PlayerSurface(props: Props) {
         fontSize: settings.size,
         speed: settings.duration,
         margin: [
-          settings.top,
-          Math.max(
-            settings.bottom,
-            (host.current?.clientHeight ?? 400) * (1 - settings.area),
-          ),
+          0,
+          (player.current?.template.$danmuku.clientHeight ?? 400) *
+            (1 - settings.area),
         ],
-        antiOverlap: true,
+        antiOverlap: settings.antiOverlap,
       });
     configure();
-    const observer = new ResizeObserver(configure);
-    if (host.current) observer.observe(host.current);
+    const observer = new ResizeObserver(() => {
+      configure();
+      player.current?.emit("resize");
+    });
+    if (player.current) observer.observe(player.current.template.$danmuku);
     if (settings.enabled) plugin.show();
     else plugin.hide();
     return () => observer.disconnect();
@@ -222,108 +248,34 @@ export function PlayerSurface(props: Props) {
       plugin.emit({
         text: message.message,
         mode: 0,
-        color: displayDanmakuColor(
-          message.color,
-          props.settings.colorMode,
-          props.settings.customColor,
-        ),
+        color: normalizeDanmakuColor(message.color),
         style: {
           fontWeight: String(props.settings.weight * 100),
-          marginBottom: `${props.settings.bottom}px`,
         },
       });
     }
   }, [props.messages, props.settings]);
-  useEffect(() => {
-    const art = player.current;
-    if (!art) return;
-    art.aspectRatio =
-      props.fit === "16:9" || props.fit === "4:3" ? props.fit : "default";
-    art.video.style.objectFit =
-      props.fit === "stretch"
-        ? "fill"
-        : props.fit === "cover"
-          ? "cover"
-          : "contain";
-  }, [props.fit, props.locked]);
-  useEffect(() => {
-    const art = player.current;
-    if (!art) return;
-    // Elements carry platform labels as text, never as HTML.
-    const label = (text: string) => {
-      const span = document.createElement("span");
-      span.textContent = text;
-      return span;
-    };
-    for (const name of [
-      "live-quality",
-      "live-line",
-      "live-danmaku",
-      "live-opacity",
-      "live-size",
-    ]) {
-      if (art.setting.find(name)) art.setting.remove(name);
-    }
-    if (props.qualities.length)
-      art.setting.add({
-        name: "live-quality",
-        html: "清晰度",
-        selector: props.qualities.map((item) => ({
-          html: label(item.quality),
-          value: item.index,
-        })),
-        onSelect: (item) => {
-          const next = latest.current.qualities.find(
-            (value) => value.index === item.value,
-          );
-          if (next) latest.current.onQuality(next);
-        },
-      });
-    if (props.sources.length)
-      art.setting.add({
-        name: "live-line",
-        html: "线路",
-        selector: props.sources.map((item) => ({
-          html: `线路 ${item.index + 1} · ${item.format.toUpperCase()}`,
-          value: item.index,
-        })),
-        onSelect: (item) => {
-          const next = latest.current.sources.find(
-            (value) => value.index === item.value,
-          );
-          if (next) latest.current.onLine(next);
-        },
-      });
-    art.setting.add({
-      name: "live-danmaku",
-      html: "显示弹幕",
-      switch: props.settings.enabled,
-      onSwitch: (item) => {
-        latest.current.onSettings({ enabled: !item.switch });
-        return !item.switch;
-      },
-    });
-    art.setting.add({
-      name: "live-opacity",
-      html: "弹幕透明度",
-      range: [props.settings.opacity, 0.1, 1, 0.1],
-      onRange: (item) => {
-        latest.current.onSettings({ opacity: Number(item.range?.[0]) });
-      },
-    });
-    art.setting.add({
-      name: "live-size",
-      html: "弹幕字号",
-      range: [props.settings.size, 8, 48, 1],
-      onRange: (item) => {
-        latest.current.onSettings({ size: Number(item.range?.[0]) });
-      },
-    });
-  }, [props.qualities, props.sources, props.settings]);
   return (
-    <div
-      className={`player-surface ${props.locked ? "locked" : ""}`}
-      ref={host}
-    />
+    <>
+      <div className="player-surface" ref={host} />
+      {controlPlayer && (
+        <PlayerControls
+          key={controlPlayer.id}
+          player={controlPlayer}
+          status={props.status}
+          switching={props.switching}
+          refreshing={props.refreshing}
+          quality={props.quality}
+          qualities={props.qualities}
+          source={props.source}
+          sources={props.sources}
+          settings={props.settings}
+          onRefresh={props.onRefresh}
+          onQuality={props.onQuality}
+          onLine={props.onLine}
+          onSettings={props.onSettings}
+        />
+      )}
+    </>
   );
 }

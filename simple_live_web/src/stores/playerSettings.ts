@@ -6,11 +6,8 @@ export const defaults = {
   weight: 4,
   duration: 8,
   area: 0.8,
-  top: 0,
-  bottom: 0,
   fortune: false,
-  colorMode: "original",
-  customColor: "#ffffff",
+  antiOverlap: true,
 };
 export type PlayerSettings = typeof defaults;
 const key = "simple-live-web.player.v1";
@@ -29,8 +26,6 @@ export function usePlayerSettings() {
         weight: [1, 9],
         duration: [1, 10],
         area: [0.1, 1],
-        top: [0, 48],
-        bottom: [0, 48],
       } as const;
       for (const field of Object.keys(limits) as (keyof typeof limits)[]) {
         const [min, max] = limits[field];
@@ -38,10 +33,6 @@ export function usePlayerSettings() {
           ? Math.min(max, Math.max(min, result[field]))
           : defaults[field];
       }
-      if (!["original", "white", "custom"].includes(result.colorMode))
-        result.colorMode = defaults.colorMode;
-      if (!/^#[0-9a-f]{6}$/i.test(result.customColor))
-        result.customColor = defaults.customColor;
       return result;
     } catch {
       return defaults;

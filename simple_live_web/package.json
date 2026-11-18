@@ -12,6 +12,7 @@
     "server:lite": "node scripts/serve.mjs --lite"
   },
   "dependencies": {
+    "antd": "^6.7.1",
     "artplayer": "^5.4.0",
     "artplayer-plugin-danmuku": "^5.3.0",
     "fflate": "^0.8.2",

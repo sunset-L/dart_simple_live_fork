@@ -1,11 +1,6 @@
 import { useEffect, useState } from "react";
-import {
-  ArrowLeft,
-  Cloud,
-  Compass,
-  LoaderCircle,
-  RefreshCw,
-} from "lucide-react";
+import { Button, Spin, Tabs, Tooltip } from "antd";
+import { ArrowLeft, Cloud, Compass, RefreshCw } from "lucide-react";
 import { api } from "../../services/libraryData";
 import {
   platforms,
@@ -34,10 +29,9 @@ export function Empty({
       <h2>{title}</h2>
       {message && <p>{message}</p>}
       {retry && (
-        <button onClick={retry}>
-          <RefreshCw size={16} />
+        <Button type="primary" onClick={retry} icon={<RefreshCw size={16} />}>
           重试
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -50,20 +44,21 @@ function Platforms({
   onChange: (site: string) => void;
 }) {
   return (
-    <div className="platform-tabs" role="tablist" aria-label="直播平台">
-      {platforms.map((item) => (
-        <button
-          role="tab"
-          aria-selected={site === item.id}
-          key={item.id}
-          className={site === item.id ? "active" : ""}
-          onClick={() => onChange(item.id)}
-        >
-          <img src={`/assets/${item.logo}`} alt="" />
-          {item.name}
-        </button>
-      ))}
-    </div>
+    <Tabs
+      className="platform-tabs"
+      aria-label="直播平台"
+      activeKey={site}
+      onChange={onChange}
+      items={platforms.map((item) => ({
+        key: item.id,
+        label: (
+          <span className="platform-tab-label">
+            <img src={`/assets/${item.logo}`} alt="" />
+            {item.name}
+          </span>
+        ),
+      }))}
+    />
   );
 }
 interface Props {
@@ -136,25 +131,25 @@ export function Catalog({
       <div className="content-heading">
         <div className="heading-with-back">
           {category && (
-            <button
-              className="icon-button"
-              title="返回分类"
-              aria-label="返回分类"
-              onClick={() => setCategory(null)}
-            >
-              <ArrowLeft size={20} />
-            </button>
+            <Tooltip title="返回分类">
+              <Button
+                type="text"
+                aria-label="返回分类"
+                onClick={() => setCategory(null)}
+                icon={<ArrowLeft size={20} />}
+              />
+            </Tooltip>
           )}
           <h1>{title}</h1>
         </div>
-        <button
-          className="icon-button"
-          title="刷新"
-          aria-label="刷新"
-          onClick={() => setRefresh((value) => value + 1)}
-        >
-          <RefreshCw size={18} />
-        </button>
+        <Tooltip title="刷新">
+          <Button
+            type="text"
+            aria-label="刷新"
+            onClick={() => setRefresh((value) => value + 1)}
+            icon={<RefreshCw size={18} />}
+          />
+        </Tooltip>
       </div>
       {showCategories ? (
         groupsLoading ? (
@@ -203,7 +198,7 @@ export function Catalog({
 function Loading() {
   return (
     <div className="loading" role="status">
-      <LoaderCircle className="spin" size={28} />
+      <Spin />
       <span>正在加载</span>
     </div>
   );
@@ -286,17 +281,16 @@ function Rooms({
       {!error && !rooms.length && <Empty title="没有找到直播间" />}
       {hasMore && !error && (
         <div className="pagination">
-          <button
-            className="quiet-button"
+          <Button
             disabled={loading}
+            loading={loading}
             onClick={() => {
               setLoading(true);
               setPage((value) => value + 1);
             }}
           >
-            {loading && <LoaderCircle className="spin" size={16} />}
             {loading ? "正在加载" : "加载更多"}
-          </button>
+          </Button>
         </div>
       )}
     </>

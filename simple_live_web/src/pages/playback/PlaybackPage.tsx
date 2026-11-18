@@ -1,23 +1,34 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  App as AntApp,
+  Button,
+  Dropdown,
+  Input,
+  Tabs,
+  Tag,
+  Tooltip,
+} from "antd";
+import {
   Copy,
   Flame,
   Heart,
   Info,
   Link2,
+  Plus,
   RefreshCw,
   Share2,
-  X,
 } from "lucide-react";
 import { openPlayback, playbackUrl } from "../../app/routes";
-import {
-  PlayerSurface,
-  type PlayerHandle,
-} from "../../features/player/components/PlayerSurface";
+import { PlayerSurface } from "../../features/player/components/PlayerSurface";
+import { PlayerBoundary } from "../../features/player/components/PlayerBoundary";
 import { PlayerSettings } from "../../features/player/components/PlayerSettings";
-import { PlaybackToolbar } from "../../features/player/components/PlaybackToolbar";
-import { PlaybackInfo } from "../../features/player/components/PlaybackInfo";
 import { DanmakuPanel } from "../../features/player/components/DanmakuPanel";
 import { usePlaybackSession } from "../../features/player/hooks/usePlaybackSession";
 import { useDanmaku } from "../../features/danmaku/useDanmaku";
@@ -29,6 +40,7 @@ import { FollowStatusLabel } from "../../features/follow/FollowStatusLabel";
 import "../../styles/player.css";
 import { Picture } from "../../components/Picture";
 import { platforms } from "../../app/platforms";
+import { formatHeat } from "../../components/formatHeat";
 
 export function PlaybackPage({
   site,
@@ -37,21 +49,35 @@ export function PlaybackPage({
   site: string;
   roomId: string;
 }) {
+  const { message, modal } = AntApp.useApp();
+  const stage = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const container = stage.current;
+    const playerFrame = frame.current;
+    if (!container || !playerFrame) return;
+    const resize = () => {
+      const width = Math.min(
+        container.clientWidth,
+        (container.clientHeight * 16) / 9,
+      );
+      playerFrame.style.width = `${width}px`;
+      playerFrame.style.height = `${(width * 9) / 16}px`;
+      playerFrame.classList.toggle("is-compact", width < 560);
+    };
+    const observer = new ResizeObserver(resize);
+    observer.observe(container);
+    resize();
+    return () => observer.disconnect();
+  }, []);
   const session = usePlaybackSession(site, roomId);
   const chat = useDanmaku(site, roomId, session.detail?.status === true);
   const { data, update } = useLibrary();
   const [settings, setSettings] = usePlayerSettings();
-  const [locked, setLocked] = useState(false),
-    [fit, setFit] = useState("contain");
   const [panel, setPanel] = useState("chat"),
     [keyword, setKeyword] = useState("");
   const followStatus = useFollowStatus(data.follows, panel === "follows");
-  const [handle, setHandle] = useState<PlayerHandle | null>(null);
-  const [status, setStatus] = useState("等待连接"),
-    [toast, setToast] = useState("");
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
-  );
+  const [status, setStatus] = useState("等待连接");
   const retries = useRef(0),
     historyWritten = useRef(false);
   const id = `${site}_${roomId}`;
@@ -62,6 +88,8 @@ export function PlaybackPage({
     (item) => item.siteId === site && roomIds.has(item.roomId),
   );
   const followed = Boolean(matchingFollow);
+  const currentFollowed = useRef(followed);
+  currentFollowed.current = followed;
   const platform = platforms.find((item) => item.id === site);
   const filter = useMemo(
     () => createFilter(data.blocked, settings.fortune),
@@ -71,12 +99,16 @@ export function PlaybackPage({
     () => chat.messages.filter((item) => filter(item.message)),
     [chat.messages, filter],
   );
-  const notify = useCallback((text: string) => {
-    setToast(text);
-    clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(""), 5000);
-  }, []);
-  useEffect(() => () => clearTimeout(toastTimer.current), []);
+  const notify = useCallback(
+    (text: string) => {
+      void message.open({
+        type: /失败|错误/.test(text) ? "error" : "success",
+        content: text,
+        duration: 4,
+      });
+    },
+    [message],
+  );
   useEffect(() => {
     document.title = `${session.detail?.title ?? "直播间"} · Simple Live`;
   }, [session.detail]);
@@ -185,57 +217,138 @@ export function PlaybackPage({
     });
   return (
     <div className="playback-page">
-      <header className="playback-header">
-        <a
-          className="icon-button"
-          href="/"
-          title="返回首页"
-          aria-label="返回首页"
-        >
-          <ArrowLeft size={19} />
-        </a>
-        <div className="playback-title">
-          <strong>{session.detail?.title ?? "直播间"}</strong>
-          <span>{session.detail?.userName ?? `${site} · ${roomId}`}</span>
-        </div>
-        <button
-          className="icon-button"
-          title="分享播放页"
-          aria-label="分享播放页"
-          onClick={() =>
-            void perform(async () => {
-              if (navigator.share)
-                await navigator.share({
-                  title: session.detail?.title,
-                  url: location.href,
-                });
-              else await navigator.clipboard.writeText(location.href);
-            })
-          }
-        >
-          <Share2 size={18} />
-        </button>
-      </header>
       <main className="playback-main">
         <section className="video-panel">
-          <div className="video-stage">
-            <PlayerSurface
-              source={session.source}
-              loading={session.loading && !session.source}
-              settings={settings}
-              messages={messages}
-              locked={locked}
-              fit={fit}
-              onReady={setHandle}
-              onState={setStatus}
-              onFailure={failed}
-              onConfirmed={session.confirm}
-              qualities={session.qualities}
-              sources={session.sources}
-              onQuality={(quality) => void session.choose(quality)}
-              onLine={session.selectLine}
-              onSettings={setSettings}
-            />
+          <section className="room-info">
+            <Tooltip title="返回关注页">
+              <a
+                className="room-avatar-link"
+                href="/#follow"
+                aria-label="返回关注页"
+              >
+                <Picture
+                  src={session.detail?.userAvatar || matchingFollow?.face}
+                />
+              </a>
+            </Tooltip>
+            <div className="room-profile">
+              <strong title={session.detail?.title}>
+                {session.detail?.title || "直播间"}
+              </strong>
+              <div className="room-meta">
+                <span
+                  className="room-anchor-name"
+                  title={session.detail?.userName}
+                >
+                  {session.detail?.userName ||
+                    matchingFollow?.userName ||
+                    "主播"}
+                </span>
+                <span className="room-heat">
+                  <Flame size={14} />
+                  {formatHeat(chat.online ?? session.detail?.online ?? 0)}
+                </span>
+                <span className="room-platform">
+                  {platform && <img src={`/assets/${platform.logo}`} alt="" />}
+                  {platform?.name ?? site}
+                </span>
+              </div>
+            </div>
+            <div className="room-actions">
+              <span
+                className="room-connection"
+                title={session.error || status}
+                role="status"
+              >
+                {session.switching ? "切换线路中" : status}
+              </span>
+              <Dropdown
+                trigger={["click"]}
+                placement="bottomRight"
+                menu={{
+                  items: [
+                    {
+                      key: "room",
+                      label: "复制直播间链接",
+                      icon: <Link2 size={16} />,
+                      disabled: !session.detail,
+                    },
+                    {
+                      key: "stream",
+                      label: "复制播放链接",
+                      icon: <Copy size={16} />,
+                      disabled: !session.source,
+                    },
+                  ],
+                  onClick: ({ key }) => {
+                    if (key === "room" && session.detail)
+                      void copy(session.detail.url, "直播间链接已复制");
+                    if (key === "stream" && session.source)
+                      void copy(session.source.url, "播放链接已复制");
+                  },
+                }}
+              >
+                <Button
+                  type="text"
+                  icon={<Share2 size={18} />}
+                  title="分享"
+                  aria-label="分享"
+                />
+              </Dropdown>
+              <Tooltip title={followed ? "取消关注" : "关注"}>
+                <Button
+                  type="text"
+                  disabled={!session.detail}
+                  className={followed ? "room-followed" : ""}
+                  aria-label={followed ? "取消关注" : "关注"}
+                  title={followed ? "取消关注" : "关注"}
+                  aria-pressed={followed}
+                  onClick={() => {
+                    if (!followed) {
+                      void toggleFollow();
+                      return;
+                    }
+                    modal.confirm({
+                      title: `取消关注 ${session.detail?.userName ?? "此主播"}？`,
+                      onOk: () =>
+                        currentFollowed.current ? toggleFollow() : undefined,
+                    });
+                  }}
+                  icon={
+                    <Heart
+                      size={20}
+                      fill={followed ? "currentColor" : "none"}
+                    />
+                  }
+                />
+              </Tooltip>
+            </div>
+          </section>
+          <div className="video-stage" ref={stage}>
+            <div className="player-frame" ref={frame}>
+              <PlayerBoundary>
+                <PlayerSurface
+                  danmakuContainer={stage}
+                  source={session.source}
+                  loading={session.loading && !session.source}
+                  refreshing={session.loading}
+                  switching={session.switching}
+                  settings={settings}
+                  messages={messages}
+                  status={status}
+                  onState={setStatus}
+                  onFailure={failed}
+                  onConfirmed={session.confirm}
+                  qualities={session.qualities}
+                  quality={session.quality}
+                  sources={session.sources}
+                  onQuality={(quality) => void session.choose(quality)}
+                  onLine={session.selectLine}
+                  onRefresh={refresh}
+                  onSettings={setSettings}
+                />
+              </PlayerBoundary>
+            </div>
             {((session.error && !session.source) ||
               (!session.loading &&
                 session.detail &&
@@ -243,98 +356,29 @@ export function PlaybackPage({
               <div className="player-error">
                 <Info size={28} />
                 <strong>{session.error || "主播暂未开播"}</strong>
-                <button onClick={refresh}>
-                  <RefreshCw size={16} />
+                <Button
+                  type="primary"
+                  onClick={refresh}
+                  icon={<RefreshCw size={16} />}
+                >
                   重新连接
-                </button>
+                </Button>
               </div>
             )}
           </div>
-          <PlaybackToolbar
-            locked={locked}
-            onLock={() => setLocked((value) => !value)}
-            onRefresh={refresh}
-            danmaku={settings.enabled}
-            onDanmaku={() => setSettings({ enabled: !settings.enabled })}
-            switching={session.switching}
-            qualities={session.qualities}
-            quality={session.quality}
-            sources={session.sources}
-            source={session.source}
-            onQuality={(quality) => void session.choose(quality)}
-            onLine={session.selectLine}
-            onPanel={(next) => setPanel(panel === next ? "chat" : next)}
-          />
-          <section className="room-info">
-            <Picture src={session.detail?.userAvatar || matchingFollow?.face} />
-            <div>
-              <strong>{session.detail?.userName ?? "直播间"}</strong>
-              <span>
-                <Flame size={14} />
-                {(chat.online ?? session.detail?.online ?? 0).toLocaleString(
-                  "zh-CN",
-                )}
-                <span className="room-platform">{platform?.name ?? site}</span>
-              </span>
-            </div>
-            <button
-              disabled={!session.detail}
-              className={`icon-button ${followed ? "followed" : ""}`}
-              aria-label={followed ? "取消关注" : "关注"}
-              title={followed ? "取消关注" : "关注"}
-              aria-pressed={followed}
-              onClick={() => void toggleFollow()}
-            >
-              <Heart size={20} fill={followed ? "currentColor" : "none"} />
-            </button>
-          </section>
-          <div className="playback-state" role="status">
-            {session.switching ? "正在获取新线路" : status}
-            {session.error && <span className="error">{session.error}</span>}
-          </div>
-          <div className="playback-actions">
-            <button
-              disabled={!session.detail}
-              onClick={() => void copy(session.detail!.url, "直播间链接已复制")}
-            >
-              <Link2 size={16} />
-              直播间链接
-            </button>
-            <button
-              disabled={!session.source}
-              onClick={() => void copy(session.source!.url, "播放直链已复制")}
-            >
-              <Copy size={16} />
-              播放直链
-            </button>
-            <button
-              onClick={() =>
-                void copy(session.error || status, "诊断信息已复制")
-              }
-            >
-              <Info size={16} />
-              复制诊断
-            </button>
-          </div>
         </section>
         <aside className="playback-sidebar">
-          <div className="tabs">
-            {[
+          <Tabs
+            activeKey={panel}
+            onChange={setPanel}
+            tabBarGutter={20}
+            items={[
               ["chat", "聊天"],
               ...(site === "bilibili" ? [["sc", "SC"]] : []),
               ["follows", "关注"],
-              ["settings", "设置"],
-              ["info", "信息"],
-            ].map(([key, label]) => (
-              <button
-                key={key}
-                className={panel === key ? "active" : ""}
-                onClick={() => setPanel(key)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+              ["settings", "弹幕设置"],
+            ].map(([key, label]) => ({ key, label }))}
+          />
           {panel === "chat" && (
             <DanmakuPanel
               messages={messages.filter((item) => item.type === "chat")}
@@ -367,8 +411,12 @@ export function PlaybackPage({
                   rel="noopener"
                   onClick={(event) => {
                     event.preventDefault();
-                    openPlayback(user.siteId, user.roomId);
+                    if (followStatus.statuses[user.id]?.status !== false)
+                      openPlayback(user.siteId, user.roomId);
                   }}
+                  aria-disabled={
+                    followStatus.statuses[user.id]?.status === false
+                  }
                 >
                   {user.userName}
                   <FollowStatusLabel value={followStatus.statuses[user.id]} />
@@ -378,12 +426,7 @@ export function PlaybackPage({
           )}
           {panel === "settings" && (
             <div className="playback-settings-panel">
-              <PlayerSettings
-                value={settings}
-                onChange={setSettings}
-                fit={fit}
-                onFit={setFit}
-              />
+              <PlayerSettings value={settings} onChange={setSettings} />
               <form
                 className="blocked-add"
                 onSubmit={(event) => {
@@ -391,51 +434,47 @@ export function PlaybackPage({
                   void addKeyword();
                 }}
               >
-                <input
+                <Input
                   aria-label="屏蔽词"
                   value={keyword}
                   maxLength={100}
                   placeholder="屏蔽关键词"
                   onChange={(event) => setKeyword(event.target.value)}
                 />
-                <button className="primary" disabled={!keyword.trim()}>
+                <Button
+                  type="primary"
+                  htmlType="submit"
+                  disabled={!keyword.trim()}
+                  icon={<Plus size={15} />}
+                >
                   添加
-                </button>
+                </Button>
               </form>
               <div className="word-list">
                 {data.blocked.map((word) => (
-                  <span key={word}>
+                  <Tag
+                    key={word}
+                    closable
+                    onClose={(event) => {
+                      event.preventDefault();
+                      void perform(() =>
+                        update((current) => ({
+                          ...current,
+                          blocked: current.blocked.filter(
+                            (item) => item !== word,
+                          ),
+                        })),
+                      );
+                    }}
+                  >
                     {word}
-                    <button
-                      title={`移除 ${word}`}
-                      onClick={() =>
-                        void perform(() =>
-                          update((current) => ({
-                            ...current,
-                            blocked: current.blocked.filter(
-                              (item) => item !== word,
-                            ),
-                          })),
-                        )
-                      }
-                    >
-                      <X size={13} />
-                    </button>
-                  </span>
+                  </Tag>
                 ))}
               </div>
             </div>
           )}
-          {panel === "info" && (
-            <PlaybackInfo player={handle?.player ?? null} status={status} />
-          )}
         </aside>
       </main>
-      {toast && (
-        <div className="toast" role="status">
-          {toast}
-        </div>
-      )}
     </div>
   );
 }

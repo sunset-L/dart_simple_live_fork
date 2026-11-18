@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Plus } from "lucide-react";
+import { Button, Input, Select } from "antd";
 import { Modal } from "../../components/feedback/Modal";
 import { platforms, type Follow } from "../../services/libraryData";
 
@@ -33,20 +34,21 @@ export function AddFollow({
       >
         <label className="field">
           直播平台
-          <select
+          <Select
+            aria-label="直播平台"
             value={siteId}
-            onChange={(event) => setSite(event.target.value)}
-          >
-            {platforms.map((site) => (
-              <option key={site.id} value={site.id}>
-                {site.name}
-              </option>
-            ))}
-          </select>
+            onChange={setSite}
+            options={platforms.map((site) => ({
+              value: site.id,
+              label: site.name,
+            }))}
+          />
         </label>
         <label className="field">
           房间号
-          <input
+          <Input
+            autoFocus
+            aria-label="房间号"
             required
             maxLength={100}
             pattern="[A-Za-z0-9_-]+"
@@ -56,7 +58,8 @@ export function AddFollow({
         </label>
         <label className="field">
           主播名称
-          <input
+          <Input
+            aria-label="主播名称"
             required
             maxLength={100}
             value={userName}
@@ -64,13 +67,15 @@ export function AddFollow({
           />
         </label>
         <div className="modal-actions">
-          <button type="button" onClick={onClose}>
-            取消
-          </button>
-          <button className="primary">
-            <Plus size={16} />
+          <Button onClick={onClose}>取消</Button>
+          <Button
+            type="primary"
+            htmlType="submit"
+            disabled={!roomId.trim() || !userName.trim()}
+            icon={<Plus size={16} />}
+          >
             添加
-          </button>
+          </Button>
         </div>
       </form>
     </Modal>

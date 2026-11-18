@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import type { Library } from "../../services/libraryData";
 import type { Page } from "../../app/routes";
+import { Segmented } from "antd";
 
 export function Mine({
   onNavigate,
@@ -73,22 +74,15 @@ export function Mine({
             <Sun size={19} />
             主题
           </span>
-          <div className="segmented">
-            {[
-              ["system", "跟随系统"],
-              ["light", "浅色"],
-              ["dark", "深色"],
-            ].map(([id, label]) => (
-              <button
-                key={id}
-                aria-pressed={theme === id}
-                className={theme === id ? "selected" : ""}
-                onClick={() => setTheme(id)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <Segmented
+            value={theme}
+            onChange={setTheme}
+            options={[
+              { value: "system", label: "跟随系统" },
+              { value: "light", label: "浅色" },
+              { value: "dark", label: "深色" },
+            ]}
+          />
         </div>
       </section>
     </div>
