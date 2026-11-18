@@ -448,25 +448,27 @@ export function PlaybackPage({
           className="playback-sidebar"
           hidden={sidebarCollapsed}
         >
-          <Tabs
-            activeKey={panel}
-            onChange={setPanel}
-            tabBarGutter={20}
-            items={[
-              ["chat", "聊天"],
-              ...(site === "bilibili" ? [["sc", "SC"]] : []),
-              ["follows", "关注"],
-              ["settings", "弹幕设置"],
-            ].map(([key, label]) => ({ key, label }))}
-          />
-          {panel === "chat" && (
+          {!sidebarCollapsed && (
+            <Tabs
+              activeKey={panel}
+              onChange={setPanel}
+              tabBarGutter={20}
+              items={[
+                ["chat", "聊天"],
+                ...(site === "bilibili" ? [["sc", "SC"]] : []),
+                ["follows", "关注"],
+                ["settings", "弹幕设置"],
+              ].map(([key, label]) => ({ key, label }))}
+            />
+          )}
+          {!sidebarCollapsed && panel === "chat" && (
             <DanmakuPanel
               messages={messages.filter((item) => item.type === "chat")}
               status={chat.status}
               onReconnect={chat.reconnect}
             />
           )}
-          {panel === "sc" && (
+          {!sidebarCollapsed && panel === "sc" && (
             <div className="chat-list">
               {messages
                 .filter((item) => item.type === "superChat")
@@ -480,7 +482,7 @@ export function PlaybackPage({
                 ))}
             </div>
           )}
-          {panel === "follows" && (
+          {!sidebarCollapsed && panel === "follows" && (
             <div className="chat-list">
               {data.follows.map((user) => (
                 <a
@@ -504,7 +506,7 @@ export function PlaybackPage({
               ))}
             </div>
           )}
-          {panel === "settings" && (
+          {!sidebarCollapsed && panel === "settings" && (
             <div className="playback-settings-panel">
               <PlayerSettings value={settings} onChange={setSettings} />
               <form
