@@ -501,12 +501,15 @@ nav button.active {
   font-size: 13px;
 }
 .live-card-heat {
+  position: relative;
+  z-index: 4;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
   white-space: nowrap;
   font-size: 12px;
+  cursor: pointer;
 }
 .live-card-state {
   position: absolute;

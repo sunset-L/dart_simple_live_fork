@@ -21,6 +21,7 @@ import {
   Heart,
   Info,
   Link2,
+  LoaderCircle,
   Plus,
   RefreshCw,
   Share2,
@@ -41,6 +42,8 @@ import "../../styles/player.css";
 import { Picture } from "../../components/Picture";
 import { platforms } from "../../app/platforms";
 import { formatHeat } from "../../components/formatHeat";
+import { playbackApi } from "../../services/playbackApi";
+import type { RoomDetail } from "../../types/playback";
 
 export function PlaybackPage({
   site,
@@ -85,11 +88,58 @@ export function PlaybackPage({
   const currentFollowed = useRef(followed);
   currentFollowed.current = followed;
   const platform = platforms.find((item) => item.id === site);
+  const heatRequest = useRef<AbortController | null>(null);
+  const heatBaseline = useRef({ chatOnline: chat.online, detail: session.detail });
+  heatBaseline.current = { chatOnline: chat.online, detail: session.detail };
+  const [heatLoading, setHeatLoading] = useState(false);
+  const [refreshedHeat, setRefreshedHeat] = useState<{
+    id: string;
+    online: number;
+    chatOnline: number | null;
+    detail: RoomDetail | null;
+  } | null>(null);
+  useEffect(() => {
+    setHeatLoading(false);
+    setRefreshedHeat(null);
+    return () => {
+      heatRequest.current?.abort();
+      heatRequest.current = null;
+    };
+  }, [site, roomId]);
   // Douyin's websocket totalUser is not the room's display_value heat metric.
   const heat =
-    site === "douyin"
-      ? (session.detail?.online ?? 0)
-      : (chat.online ?? session.detail?.online ?? 0);
+    refreshedHeat?.id === id &&
+    refreshedHeat.detail === session.detail &&
+    (site === "douyin" || refreshedHeat.chatOnline === chat.online)
+      ? refreshedHeat.online
+      : site === "douyin"
+        ? (session.detail?.online ?? 0)
+        : (chat.online ?? session.detail?.online ?? 0);
+  const refreshHeat = async () => {
+    if (heatRequest.current) return;
+    const controller = new AbortController();
+    heatRequest.current = controller;
+    setHeatLoading(true);
+    try {
+      const room = await playbackApi.detail(site, roomId, controller.signal);
+      if (controller.signal.aborted) return;
+      setRefreshedHeat({
+        id,
+        online: room.online,
+        ...heatBaseline.current,
+      });
+    } catch (error) {
+      if (!controller.signal.aborted)
+        void message.error(
+          error instanceof Error ? error.message : "热度刷新失败，请重试",
+        );
+    } finally {
+      if (heatRequest.current === controller) {
+        heatRequest.current = null;
+        setHeatLoading(false);
+      }
+    }
+  };
   const filter = useMemo(
     () => createFilter(data.blocked, settings.fortune),
     [data.blocked, settings.fortune],
@@ -243,10 +293,24 @@ export function PlaybackPage({
                     matchingFollow?.userName ||
                     "主播"}
                 </span>
-                <span className="room-heat">
-                  <Flame size={14} />
-                  {formatHeat(heat)}
-                </span>
+                <Tooltip title={heat.toLocaleString("en-US")}>
+                  <Button
+                    type="text"
+                    className="room-heat"
+                    aria-label="刷新热度"
+                    aria-busy={heatLoading}
+                    onClick={() => void refreshHeat()}
+                    icon={
+                      heatLoading ? (
+                        <LoaderCircle size={14} className="spin" />
+                      ) : (
+                        <Flame size={14} />
+                      )
+                    }
+                  >
+                    {formatHeat(heat)}
+                  </Button>
+                </Tooltip>
                 <span className="room-platform">
                   {platform && <img src={`/assets/${platform.logo}`} alt="" />}
                   {platform?.name ?? site}

@@ -32,7 +32,6 @@ export function useFollowStatus(
     manualRefresh.current = undefined;
     const items = JSON.parse(rooms) as Pick<Follow, "id" | "siteId" | "roomId">[];
     const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
     let animationTimer: ReturnType<typeof setTimeout> | undefined;
     let running = false;
     async function refresh() {
@@ -44,7 +43,6 @@ export function useFollowStatus(
         return;
       running = true;
       const started = performance.now();
-      clearTimeout(timer);
       setLoading(items.length > 0);
       setStatuses((previous) =>
         Object.fromEntries(
@@ -94,7 +92,6 @@ export function useFollowStatus(
           setLoading(false);
           onComplete?.({ total: items.length, failed });
           onComplete = undefined;
-          timer = setTimeout(() => void refresh(), 60000);
         };
         const remaining = items.length
           ? Math.max(0, 600 - (performance.now() - started))
@@ -103,16 +100,10 @@ export function useFollowStatus(
         else complete();
       }
     }
-    const visible = () => {
-      if (document.visibilityState !== "hidden") void refresh();
-    };
     void refresh();
-    document.addEventListener("visibilitychange", visible);
     return () => {
       controller.abort();
-      clearTimeout(timer);
       clearTimeout(animationTimer);
-      document.removeEventListener("visibilitychange", visible);
     };
   }, [rooms, enabled, version]);
   return {

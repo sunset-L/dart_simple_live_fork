@@ -373,6 +373,17 @@ html:has(.playback-page)::-webkit-scrollbar-thumb,
   object-fit: contain;
   background: transparent;
 }
+.room-meta .ant-btn.room-heat {
+  height: 22px;
+  padding: 0 3px;
+  margin: -1px -3px;
+  gap: 5px;
+  color: inherit;
+  font-size: inherit;
+}
+.room-meta .ant-btn.room-heat:hover {
+  color: var(--primary);
+}
 .source-row {
   display: flex;
   align-items: center;

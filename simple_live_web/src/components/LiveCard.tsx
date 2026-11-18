@@ -79,6 +79,9 @@ export function LiveCard({
   }, [siteId, roomId, face]);
 
   const avatarUrl = needsFollowAvatar(face) ? avatar : face;
+  function open() {
+    if (status !== false) (onOpen ?? (() => openPlayback(siteId, roomId)))();
+  }
   const state =
     status === false
       ? "未开播"
@@ -101,10 +104,7 @@ export function LiveCard({
         title={
           status === false ? "主播未开播" : statusError || title || userName
         }
-        onClick={() => {
-          if (status !== false)
-            (onOpen ?? (() => openPlayback(siteId, roomId)))();
-        }}
+        onClick={open}
       />
       <div
         className={`live-card-cover ${status === false ? "is-offline" : ""}`}
@@ -138,13 +138,12 @@ export function LiveCard({
             online !== undefined &&
             Number.isFinite(online) &&
             online >= 0 && (
-              <span
-                className="live-card-heat"
-                title={`热度 ${formatHeat(online)}`}
-              >
-                <Flame size={16} />
-                {formatHeat(online)}
-              </span>
+              <Tooltip title={online.toLocaleString("en-US")}>
+                <span className="live-card-heat" onClick={open}>
+                  <Flame size={16} />
+                  {formatHeat(online)}
+                </span>
+              </Tooltip>
             )}
         </div>
       </div>
