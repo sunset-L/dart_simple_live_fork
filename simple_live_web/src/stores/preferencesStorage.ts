@@ -20,14 +20,21 @@ export const playerDefaults = {
   antiOverlap: true,
 };
 export type PlayerSettings = typeof playerDefaults;
+interface WebdavSettings {
+  url: string;
+  username: string;
+  password: string;
+}
 interface Preferences {
   mode: string;
   primaryColor: string;
   sidebarCollapsed: boolean;
   player: PlayerSettings;
+  webdav: WebdavSettings;
 }
-type PreferencePatch = Partial<Omit<Preferences, "player">> & {
+type PreferencePatch = Partial<Omit<Preferences, "player" | "webdav">> & {
   player?: Partial<PlayerSettings>;
+  webdav?: Partial<WebdavSettings>;
 };
 interface StoredPreferences {
   data: PreferencePatch;
@@ -78,13 +85,19 @@ function legacyPreferences(): PreferencePatch {
 }
 
 function merge(left: PreferencePatch, right: PreferencePatch): PreferencePatch {
-  return { ...left, ...right, player: { ...left.player, ...right.player } };
+  return {
+    ...left,
+    ...right,
+    player: { ...left.player, ...right.player },
+    webdav: { ...left.webdav, ...right.webdav },
+  };
 }
 const defaults: Preferences = {
   mode: "system",
   primaryColor: "#1677ff",
   sidebarCollapsed: false,
   player: playerDefaults,
+  webdav: { url: "", username: "", password: "" },
 };
 const migrationKey = "simple-live-web.preferences.v1.migrated";
 const listeners = new Set<() => void>();
@@ -106,6 +119,8 @@ function publish(error = cached.error) {
   ) as Preferences;
   if (JSON.stringify(data.player) === JSON.stringify(cached.data.player))
     data.player = cached.data.player;
+  if (JSON.stringify(data.webdav) === JSON.stringify(cached.data.webdav))
+    data.webdav = cached.data.webdav;
   cached = {
     data,
     error,

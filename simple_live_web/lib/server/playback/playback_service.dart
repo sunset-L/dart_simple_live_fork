@@ -11,6 +11,12 @@ class PlaybackService {
   final _targets =
       <String, ({String url, Map<String, String> headers, DateTime expires})>{};
   final _random = Random.secure();
+  int _generation = 0;
+
+  void invalidate() {
+    _generation++;
+    _rooms.clear();
+  }
 
   LiveSite site(String id) {
     if (!{'bilibili', 'douyu', 'huya', 'douyin'}.contains(id)) {
@@ -33,7 +39,9 @@ class PlaybackService {
       throw const FormatException('房间号格式无效');
     }
     final key = '$id:$roomId';
-    final pending = _pending[key];
+    final generation = _generation;
+    final pendingKey = '$generation:$key';
+    final pending = _pending[pendingKey];
     if (pending != null) return pending;
     final cached = _rooms[key];
     if (!fresh &&
@@ -45,14 +53,16 @@ class PlaybackService {
     final future = platform
         .getRoomDetail(roomId: roomId)
         .timeout(const Duration(seconds: 60));
-    _pending[key] = future;
+    _pending[pendingKey] = future;
     try {
       final value = await future;
-      if (_rooms.length >= 100) _rooms.remove(_rooms.keys.first);
-      _rooms[key] = (detail: value, time: DateTime.now());
+      if (generation == _generation) {
+        if (_rooms.length >= 100) _rooms.remove(_rooms.keys.first);
+        _rooms[key] = (detail: value, time: DateTime.now());
+      }
       return value;
     } finally {
-      _pending.remove(key);
+      _pending.remove(pendingKey);
     }
   }
 

@@ -7,9 +7,10 @@ import { FollowPage } from "../pages/follow/FollowPage";
 import { Mine } from "../pages/mine/MinePage";
 import { HistoryPage } from "../pages/history/HistoryPage";
 import { Blocked } from "../pages/blocked/BlockedPage";
+import { AccountPage } from "../pages/accounts/AccountPage";
 import { TagDialog } from "../features/follow/TagDialog";
 import { AddFollow } from "../features/follow/AddFollow";
-import { openPlayback } from "./routes";
+import { openPlayback, type Page } from "./routes";
 import { Sidebar } from "./Sidebar";
 import { ThemePicker } from "./ThemePicker";
 import { useAppearance } from "./AppearanceProvider";
@@ -36,8 +37,6 @@ import {
 import { refreshLibrary, watchLibrary } from "../stores/libraryStorage";
 import { usePreferences } from "../stores/preferencesStorage";
 
-type Page =
-  "home" | "follow" | "category" | "mine" | "sync" | "history" | "blocked";
 const pageNames: Record<Page, string> = {
   home: "首页",
   follow: "我的关注",
@@ -46,6 +45,7 @@ const pageNames: Record<Page, string> = {
   sync: "数据同步",
   history: "历史记录",
   blocked: "弹幕屏蔽词",
+  accounts: "账号管理",
 };
 const validPage = (): Page => {
   const value = location.hash.slice(1);
@@ -202,7 +202,7 @@ export function App() {
     });
   }
   const isCatalog = page === "home" || page === "category";
-  const secondary = ["sync", "history", "blocked"].includes(page);
+  const secondary = ["sync", "history", "blocked", "accounts"].includes(page);
   const activeNav =
     page === "history" ? historyParent : secondary ? "mine" : page;
   const selectedTag = data.tags.some((item) => item.tag === tag) ? tag : "全部";
@@ -393,8 +393,10 @@ export function App() {
             notify={notify}
           />
         )}
+        {page === "accounts" && <AccountPage />}
         <div hidden={page !== "sync"}>
           <Sync
+            active={page === "sync"}
             data={data}
             commit={(next, expected) => commit(next, expected)}
             notify={notify}

@@ -948,6 +948,47 @@ nav button.active {
 .spin {
   animation: spin 1s linear infinite;
 }
+.account-list {
+  border-top: 1px solid var(--line);
+}
+.account-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 82px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.account-platform-logo {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.account-profile {
+  display: grid;
+  gap: 5px;
+  flex: 1;
+  min-width: 140px;
+  overflow-wrap: anywhere;
+}
+.account-profile strong {
+  font-size: 14px;
+}
+.account-profile .muted {
+  font-size: 12px;
+}
+.account-row .account-actions {
+  margin: 0;
+  gap: 6px;
+}
+.account-qr {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  padding: 12px 0 20px;
+}
 @keyframes spin {
   to {
     transform: rotate(360deg);

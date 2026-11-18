@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:dart_quickjs/dart_quickjs.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
+import 'accounts/account_service.dart';
 import 'danmaku/danmaku_service.dart';
 import 'library/library_service.dart';
 import 'playback/playback_service.dart';
@@ -23,6 +24,7 @@ final sites = <String, LiveSite>{
   'douyin': DouyinSite(),
 };
 final playback = PlaybackService(sites);
+final accounts = AccountService(sites, playback.invalidate);
 final playbackRoutes = PlaybackRoutes(playback);
 final danmaku = DanmakuService(playback);
 final library = LibraryService();
@@ -43,6 +45,11 @@ Future<void> main() async {
     }
   }
   final port = int.parse(Platform.environment['PORT'] ?? '23236');
+  try {
+    await accounts.refresh();
+  } catch (_) {
+    stderr.writeln('账号数据读取失败，请在账号管理中检查本地数据文件');
+  }
   final server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
   stdout.writeln('Simple Live Web: http://127.0.0.1:$port');
   await for (final request in server) {
@@ -73,6 +80,7 @@ Future<void> handle(HttpRequest request) async {
     }
     if (!request.uri.path.startsWith('/api/')) {
       if (request.uri.path == '/ws/danmaku') {
+        await accounts.refresh();
         final socket = await WebSocketTransformer.upgrade(request);
         upgraded = true;
         await danmaku.serve(socket, request.uri);
@@ -102,13 +110,18 @@ Future<void> handle(HttpRequest request) async {
         result = await library.read();
       } else if (request.uri.path == '/api/preferences') {
         result = await preferences.read();
+      } else if (request.uri.path == '/api/accounts') {
+        result = await accounts.summary();
       } else if (request.uri.path == '/api/live-status') {
+        await accounts.refresh();
         result = await liveStatuses.read(request.uri);
       } else if (request.uri.path.startsWith('/api/playback/')) {
+        await accounts.refresh();
         result = await playbackRoutes
             .read(request.uri)
             .timeout(const Duration(seconds: 90));
       } else {
+        await accounts.refresh();
         result = await readCatalogApi(
           request.uri,
           sites,
@@ -126,8 +139,9 @@ Future<void> handle(HttpRequest request) async {
       result = switch (request.uri.path) {
         '/api/library' => await library.write(body),
         '/api/preferences' => await preferences.write(body),
+        '/api/accounts' => await accounts.handle(body),
         '/api/webdav' => await webdav(body),
-        '/api/device' => await device(body),
+        '/api/device' => await device(body, accounts),
         _ => throw const FormatException('接口不存在'),
       };
     } else {

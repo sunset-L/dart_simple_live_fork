@@ -29,8 +29,21 @@ import {
   type Library,
   type Selection,
 } from "../../services/libraryData";
+import { hasLibraryData, readAccounts } from "./archive";
+import {
+  exportAccounts,
+  refreshAccounts,
+  restoreAccounts,
+  useAccounts,
+  validateAccounts,
+} from "../../stores/accountsStorage";
+import { accountSites, type AccountCredentials } from "../../types/accounts";
+import type { Archive } from "../../types/library";
+import { platforms } from "../../app/platforms";
+import { updatePreferences, usePreferences } from "../../stores/preferencesStorage";
 
 interface Props {
+  active: boolean;
   data: Library;
   commit: (data: Library, expected: Library) => Promise<void>;
   notify: (message: string) => void;
@@ -40,18 +53,21 @@ interface Remote {
   data?: string;
   etag?: string;
 }
-export function Sync({ data, commit, notify }: Props) {
+export function Sync({ active, data, commit, notify }: Props) {
   const { modal } = AntApp.useApp();
+  const accounts = useAccounts(active);
+  const { data: preferences, error: preferencesError } = usePreferences();
+  const { url, username, password } = preferences.webdav;
   const [tab, setTab] = useState("webdav");
   const [selection, setSelection] = useState<Selection>({
     follows: true,
     histories: true,
     blocked: true,
+    bilibili: false,
+    douyu: false,
+    douyin: false,
   });
   const [replace, setReplace] = useState(false);
-  const [url, setUrl] = useState("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
   const [address, setAddress] = useState("");
   const [busy, setBusy] = useState("");
   const [status, setStatus] = useState("");
@@ -60,6 +76,7 @@ export function Sync({ data, commit, notify }: Props) {
   const file = useRef<HTMLInputElement>(null);
   const locked = useRef(false);
   const chosen = Object.values(selection).some(Boolean);
+  const selectedAccounts = accountSites.filter((site) => selection[site]);
 
   async function run(label: string, action: () => Promise<void>) {
     if (locked.current) return;
@@ -92,6 +109,47 @@ export function Sync({ data, commit, notify }: Props) {
       }))
     );
   }
+  async function confirmAccounts(outbound: boolean) {
+    return modal.confirm({
+      title: outbound ? "同步账号凭据？" : "恢复账号凭据？",
+      content: outbound
+        ? "账号凭据包含登录授权，将以明文写入备份或传输至设备。请仅使用可信的存储和设备，勿分享备份文件。"
+        : "非空凭据会替换所选平台当前的登录授权；覆盖模式下空凭据也会清除账号。",
+      okButtonProps: { danger: true },
+    });
+  }
+  async function archiveCredentials(): Promise<AccountCredentials> {
+    if (!selectedAccounts.length) return {};
+    const snapshot = await refreshAccounts();
+    return exportAccounts(selectedAccounts, snapshot.revision);
+  }
+  async function applyArchive(files: Archive) {
+    const hasLibrary = hasLibraryData(files, selection);
+    const incoming = readAccounts(files, selection);
+    const hasAccounts = Object.keys(incoming).length > 0;
+    if (!hasLibrary && !hasAccounts) throw new Error("备份中没有所选类型的数据，未修改本地数据");
+    const next = hasLibrary ? restore(data, files, selection, replace) : data;
+    // Validate both files before either independent local store is changed.
+    if (hasAccounts) await validateAccounts(incoming);
+    if (!(await confirmRestore())) return false;
+    if (hasAccounts && !(await confirmAccounts(false))) return false;
+    const patch: AccountCredentials = {};
+    for (const site of accountSites) {
+      if (incoming[site] !== undefined && (replace || incoming[site]?.trim()))
+        patch[site] = incoming[site];
+    }
+    const snapshot = Object.keys(patch).length ? await refreshAccounts() : null;
+    if (hasLibrary) await commit(next, data);
+    if (snapshot) {
+      try { await restoreAccounts(patch, snapshot.revision); }
+      catch {
+        throw new Error(hasLibrary
+          ? "列表数据已恢复，但账号恢复失败，无法自动回滚，请只选择账号重试"
+          : "账号恢复失败，请刷新账号状态后重试");
+      }
+    }
+    return true;
+  }
   async function cloud(action: "check" | "download" | "upload") {
     const credentials = { url: url.trim(), username, password };
     if (!url.trim()) throw new Error("请填写 WebDAV 地址");
@@ -109,7 +167,6 @@ export function Sync({ data, commit, notify }: Props) {
       return;
     }
     if (!chosen) throw new Error("请选择至少一项同步数据");
-    if (action === "download" && !(await confirmRestore())) return;
     if (
       action === "upload" &&
       !(await modal.confirm({
@@ -118,6 +175,7 @@ export function Sync({ data, commit, notify }: Props) {
       }))
     )
       return;
+    if (action === "upload" && selectedAccounts.length && !(await confirmAccounts(true))) return;
     const remote = await api<Remote>("webdav", {
       ...credentials,
       action: "download",
@@ -125,11 +183,8 @@ export function Sync({ data, commit, notify }: Props) {
     if (action === "download") {
       if (remote.missing || !remote.data)
         throw new Error("云端还没有 backup.zip 备份");
-      await commit(
-        restore(data, readArchive(fromBase64(remote.data)), selection, replace),
-        data,
-      );
-      complete("云端数据已恢复");
+      if (await applyArchive(readArchive(fromBase64(remote.data))))
+        complete("云端数据已恢复");
     } else {
       const base = remote.missing ? {} : readArchive(fromBase64(remote.data!));
       if (
@@ -143,10 +198,11 @@ export function Sync({ data, commit, notify }: Props) {
         }))
       )
         return;
+      const credentialsData = await archiveCredentials();
       await api("webdav", {
         ...credentials,
         action: "upload",
-        data: toBase64(makeArchive(data, selection, base)),
+        data: toBase64(makeArchive(data, selection, base, credentialsData)),
         etag: remote.etag,
         missing: remote.missing,
       });
@@ -156,6 +212,7 @@ export function Sync({ data, commit, notify }: Props) {
   async function push() {
     if (!address.trim()) throw new Error("请填写设备 IP 地址");
     if (!chosen) throw new Error("请选择至少一项同步数据");
+    if (selection.douyin) throw new Error("设备协议不支持抖音账号，请使用 ZIP 或 WebDAV");
     if (
       !(await modal.confirm({
         title: `${replace ? "覆盖" : "合并"}设备 ${address} 上的所选数据？`,
@@ -163,7 +220,9 @@ export function Sync({ data, commit, notify }: Props) {
       }))
     )
       return;
+    if (selectedAccounts.length && !(await confirmAccounts(true))) return;
     await api("device", { address: address.trim(), kind: "info" });
+    const accountSnapshot = selectedAccounts.length ? await refreshAccounts() : null;
     const entries: [string, unknown, string][] = [
       ...(selection.follows
         ? ([
@@ -185,6 +244,9 @@ export function Sync({ data, commit, notify }: Props) {
             string,
           ][])
         : []),
+      ...selectedAccounts.map((site): [string, unknown, string] => [
+        `account/${site}`, undefined, `${platforms.find((item) => item.id === site)?.name}账号`,
+      ]),
     ];
     const completed: string[] = [];
     for (const [kind, payload, label] of entries) {
@@ -194,6 +256,7 @@ export function Sync({ data, commit, notify }: Props) {
           kind,
           data: payload,
           overlay: replace,
+          revision: accountSnapshot?.revision,
         });
         completed.push(label);
       } catch {
@@ -219,11 +282,14 @@ export function Sync({ data, commit, notify }: Props) {
       <Tabs
         aria-label="同步方式"
         activeKey={tab}
-        onChange={setTab}
+        onChange={(value) => {
+          setTab(value);
+          if (value === "device") setSelection((current) => ({ ...current, douyin: false }));
+        }}
         items={[
-          { key: "webdav", label: "WebDAV", icon: <Cloud size={18} /> },
-          { key: "device", label: "局域网", icon: <Monitor size={18} /> },
-          { key: "file", label: "本地备份", icon: <FolderArchive size={18} /> },
+          { key: "webdav", label: "WebDAV", icon: <Cloud size={18} />, disabled: !!busy },
+          { key: "device", label: "局域网", icon: <Monitor size={18} />, disabled: !!busy },
+          { key: "file", label: "本地备份", icon: <FolderArchive size={18} />, disabled: !!busy },
         ]}
       />
       <ConfigProvider componentDisabled={!!busy}>
@@ -255,6 +321,18 @@ export function Sync({ data, commit, notify }: Props) {
                 />
               </label>
             ))}
+            {accountSites.map((site) => {
+              const account = accounts.data?.items.find((item) => item.site === site);
+              const label = `${platforms.find((item) => item.id === site)?.name}${site === "douyin" ? " ttwid" : "账号"}`;
+              return (
+                <label className="setting-row" key={site}>
+                  <span>{label}<small>{accounts.error ? "读取失败" : !accounts.data ? "未读取" : account?.configured ? "已保存" : "未配置"}</small></span>
+                  <Switch aria-label={label} checked={selection[site]}
+                    disabled={tab === "device" && site === "douyin"}
+                    onChange={(checked) => setSelection({ ...selection, [site]: checked })} />
+                </label>
+              );
+            })}
             <div className="setting-row">
               <span>恢复与推送方式</span>
               <Segmented
@@ -276,8 +354,10 @@ export function Sync({ data, commit, notify }: Props) {
                   type="url"
                   placeholder="https://dav.example.com/dav/"
                   autoComplete="url"
+                  disabled={!!preferencesError}
+                  maxLength={4096}
                   value={url}
-                  onChange={(event) => setUrl(event.target.value)}
+                  onChange={(event) => updatePreferences({ webdav: { url: event.target.value } })}
                 />
               </label>
               <div className="form-grid">
@@ -285,16 +365,20 @@ export function Sync({ data, commit, notify }: Props) {
                   用户名
                   <Input
                     autoComplete="username"
+                    disabled={!!preferencesError}
+                    maxLength={2048}
                     value={username}
-                    onChange={(event) => setUsername(event.target.value)}
+                    onChange={(event) => updatePreferences({ webdav: { username: event.target.value } })}
                   />
                 </label>
                 <label className="field">
                   密码
                   <Input.Password
                     autoComplete="off"
+                    disabled={!!preferencesError}
+                    maxLength={8192}
                     value={password}
-                    onChange={(event) => setPassword(event.target.value)}
+                    onChange={(event) => updatePreferences({ webdav: { password: event.target.value } })}
                   />
                 </label>
               </div>
@@ -380,8 +464,10 @@ export function Sync({ data, commit, notify }: Props) {
                   disabled={!!busy || !chosen}
                   onClick={() =>
                     run("导出中", async () => {
+                      if (selectedAccounts.length && !(await confirmAccounts(true))) return;
+                      const credentialsData = await archiveCredentials();
                       download(
-                        makeArchive(data, selection),
+                        makeArchive(data, selection, {}, credentialsData),
                         `SimpleLive_${new Date().toISOString().slice(0, 10)}.zip`,
                       );
                       setStatus("备份已导出");
@@ -403,19 +489,9 @@ export function Sync({ data, commit, notify }: Props) {
                   void run("导入中", async () => {
                     if (selected.size > 20 * 1024 * 1024)
                       throw new Error("备份不能超过 20 MB");
-                    if (!(await confirmRestore())) return;
-                    await commit(
-                      restore(
-                        data,
-                        readArchive(
-                          new Uint8Array(await selected.arrayBuffer()),
-                        ),
-                        selection,
-                        replace,
-                      ),
-                      data,
-                    );
-                    complete("备份已导入");
+                    if (await applyArchive(readArchive(
+                      new Uint8Array(await selected.arrayBuffer()),
+                    ))) complete("备份已导入");
                   });
                 }}
               />

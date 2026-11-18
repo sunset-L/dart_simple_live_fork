@@ -51,6 +51,9 @@ export type Selection = {
   follows: boolean;
   histories: boolean;
   blocked: boolean;
+  bilibili: boolean;
+  douyu: boolean;
+  douyin: boolean;
 };
 
 export type Archive = Record<string, Uint8Array>;

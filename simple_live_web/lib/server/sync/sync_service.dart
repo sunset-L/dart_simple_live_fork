@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
 import '../network.dart';
+import '../accounts/account_service.dart';
 
 Future<Map<String, dynamic>> webdav(Map<String, dynamic> body) async {
   final base = Uri.tryParse(body['url'] as String? ?? '');
@@ -115,7 +116,10 @@ void requireSuccess(Response<dynamic> response) {
   }
 }
 
-Future<Object> device(Map<String, dynamic> body) async {
+Future<Object> device(
+  Map<String, dynamic> body,
+  AccountService accounts,
+) async {
   final address = InternetAddress.tryParse(body['address'] as String? ?? '');
   if (address == null || address.type != InternetAddressType.IPv4) {
     throw const FormatException('请输入设备的 IPv4 地址');
@@ -128,7 +132,15 @@ Future<Object> device(Map<String, dynamic> body) async {
     throw const FormatException('仅支持本机或局域网设备');
   }
   final kind = body['kind'];
-  if (!['info', 'follow', 'tag', 'history', 'blocked_word'].contains(kind)) {
+  if (![
+    'info',
+    'follow',
+    'tag',
+    'history',
+    'blocked_word',
+    'account/bilibili',
+    'account/douyu',
+  ].contains(kind)) {
     throw const FormatException('不支持的数据类型');
   }
   final uri = Uri(
@@ -140,9 +152,15 @@ Future<Object> device(Map<String, dynamic> body) async {
         ? null
         : {'overlay': body['overlay'] == true ? '1' : '0'},
   );
+  Object? payload = body['data'];
+  if (kind == 'account/bilibili' || kind == 'account/douyu') {
+    final site = (kind as String).split('/').last;
+    final saved = await accounts.export(body['revision'], [site]);
+    payload = {site == 'bilibili' ? 'cookie' : 'auth': saved[site]};
+  }
   final response = await network.request<dynamic>(
     uri.toString(),
-    data: kind == 'info' ? null : jsonEncode(body['data']),
+    data: kind == 'info' ? null : jsonEncode(payload),
     options: Options(
       method: kind == 'info' ? 'GET' : 'POST',
       responseType: ResponseType.stream,

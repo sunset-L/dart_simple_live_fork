@@ -42,37 +42,36 @@ class PreferencesService {
   Future<Map<String, dynamic>> read() =>
       _locked(() async => {'data': await _read()});
 
-  Future<Map<String, dynamic>> write(Map<String, dynamic> body) => _locked(
-    () async {
-      final patch = _validate(body['patch']);
-      final current = await _read();
-      final onlyMissing = body['onlyMissing'] == true;
-      // Merge only changed fields under the lock, including individual sliders.
-      for (final entry in patch.entries) {
-        if (entry.key == 'player') {
-          final player = Map<String, dynamic>.from(
-            current['player'] as Map<String, dynamic>? ?? {},
-          );
-          for (final field in (entry.value as Map<String, dynamic>).entries) {
-            if (!onlyMissing || !player.containsKey(field.key)) {
-              player[field.key] = field.value;
+  Future<Map<String, dynamic>> write(Map<String, dynamic> body) =>
+      _locked(() async {
+        final patch = _validate(body['patch']);
+        final current = await _read();
+        final onlyMissing = body['onlyMissing'] == true;
+        // Merge individual nested fields so other pages' edits are preserved.
+        for (final entry in patch.entries) {
+          if (entry.key == 'player' || entry.key == 'webdav') {
+            final nested = Map<String, dynamic>.from(
+              current[entry.key] as Map<String, dynamic>? ?? {},
+            );
+            for (final field in (entry.value as Map<String, dynamic>).entries) {
+              if (!onlyMissing || !nested.containsKey(field.key)) {
+                nested[field.key] = field.value;
+              }
             }
+            current[entry.key] = nested;
+          } else if (!onlyMissing || !current.containsKey(entry.key)) {
+            current[entry.key] = entry.value;
           }
-          current['player'] = player;
-        } else if (!onlyMissing || !current.containsKey(entry.key)) {
-          current[entry.key] = entry.value;
         }
-      }
-      final temporary = File('${_file.path}.tmp');
-      try {
-        await temporary.writeAsString(jsonEncode(current), flush: true);
-        await temporary.rename(_file.path);
-      } finally {
-        if (await temporary.exists()) await temporary.delete();
-      }
-      return {'data': current};
-    },
-  );
+        final temporary = File('${_file.path}.tmp');
+        try {
+          await temporary.writeAsString(jsonEncode(current), flush: true);
+          await temporary.rename(_file.path);
+        } finally {
+          if (await temporary.exists()) await temporary.delete();
+        }
+        return {'data': current};
+      });
 }
 
 Map<String, dynamic> _validate(Object? value) {
@@ -88,14 +87,30 @@ Map<String, dynamic> _validate(Object? value) {
             RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(entry.value as String),
       'sidebarCollapsed' => entry.value is bool,
       'player' => entry.value is Map<String, dynamic>,
+      'webdav' => entry.value is Map<String, dynamic>,
       _ => false,
     };
     if (!valid) throw const FormatException('设置字段无效');
-    result[entry.key] = entry.key == 'player'
-        ? _validatePlayer(entry.value as Map<String, dynamic>)
-        : entry.value;
+    result[entry.key] = switch (entry.key) {
+      'player' => _validatePlayer(entry.value as Map<String, dynamic>),
+      'webdav' => _validateWebdav(entry.value as Map<String, dynamic>),
+      _ => entry.value,
+    };
   }
   return result;
+}
+
+Map<String, dynamic> _validateWebdav(Map<String, dynamic> value) {
+  const limits = {'url': 4096, 'username': 2048, 'password': 8192};
+  for (final entry in value.entries) {
+    final limit = limits[entry.key];
+    if (limit == null ||
+        entry.value is! String ||
+        (entry.value as String).length > limit) {
+      throw const FormatException('WebDAV 配置字段无效或过长');
+    }
+  }
+  return Map<String, dynamic>.from(value);
 }
 
 Map<String, dynamic> _validatePlayer(Map<String, dynamic> value) {

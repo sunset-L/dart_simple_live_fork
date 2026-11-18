@@ -1,5 +1,5 @@
 export type Page =
-  "home" | "follow" | "category" | "mine" | "sync" | "history" | "blocked";
+  "home" | "follow" | "category" | "mine" | "sync" | "history" | "blocked" | "accounts";
 export function playbackUrl(site: string, roomId: string) {
   return `/live/${encodeURIComponent(site)}/${encodeURIComponent(roomId)}`;
 }

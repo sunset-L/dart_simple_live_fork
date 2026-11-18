@@ -1,5 +1,6 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import type { Library, Selection, Archive } from "../../types/library";
+import { accountSites, type AccountCredentials } from "../../types/accounts";
 import {
   emptyLibrary,
   record,
@@ -12,6 +13,11 @@ const filenames = {
   histories: "SimpleLive_histories.json",
   blocked: "SimpleLive_blocked_word.json",
 };
+const accountFiles = {
+  bilibili: { name: "SimpleLive_bilibili_account.json", field: "cookie" },
+  douyu: { name: "SimpleLive_douyu_account.json", field: "auth" },
+  douyin: { name: "SimpleLive_douyin_account.json", field: "cookie" },
+} as const;
 
 const limit = 20 * 1024 * 1024;
 
@@ -33,9 +39,33 @@ export function readArchive(bytes: Uint8Array): Archive {
       return true;
     },
   });
-  if (!Object.values(filenames).some((name) => files[name]))
+  if (![...Object.values(filenames), ...Object.values(accountFiles).map((file) => file.name)]
+    .some((name) => files[name]))
     throw new Error("这不是 Simple Live 备份");
   return files;
+}
+
+export function hasLibraryData(files: Archive, selection: Selection) {
+  return (Object.keys(filenames) as (keyof typeof filenames)[]).some((key) =>
+    (key === "tags" ? selection.follows : selection[key]) && !!files[filenames[key]],
+  );
+}
+
+export function readAccounts(files: Archive, selection: Selection): AccountCredentials {
+  const result: AccountCredentials = {};
+  for (const site of accountSites) {
+    const file = accountFiles[site];
+    if (!selection[site] || !files[file.name]) continue;
+    try {
+      const value = record(record(JSON.parse(strFromU8(files[file.name]))).data)[file.field];
+      if (typeof value !== "string" || value.length > 50000) throw new Error();
+      result[site] = value;
+    } catch {
+      // JSON parser messages can contain fragments of private credentials.
+      throw new Error("备份中的账号数据格式无效，未修改本地数据");
+    }
+  }
+  return result;
 }
 
 export function restore(
@@ -103,12 +133,19 @@ export function makeArchive(
   data: Library,
   selection: Selection,
   base: Archive = {},
+  accounts: AccountCredentials = {},
 ): Uint8Array {
   const files = { ...base };
   for (const key of Object.keys(filenames) as (keyof typeof filenames)[]) {
     if (key === "tags" ? selection.follows : selection[key]) {
       files[filenames[key]] = strToU8(JSON.stringify({ data: data[key] }));
     }
+  }
+  for (const site of accountSites) {
+    if (!selection[site]) continue;
+    if (typeof accounts[site] !== "string") throw new Error("账号数据未读取，备份已取消");
+    const file = accountFiles[site];
+    files[file.name] = strToU8(JSON.stringify({ data: { [file.field]: accounts[site] } }));
   }
   const size = Object.values(files).reduce(
     (sum, value) => sum + value.byteLength,

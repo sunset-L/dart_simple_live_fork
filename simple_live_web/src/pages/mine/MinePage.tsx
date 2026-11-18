@@ -4,6 +4,7 @@ import {
   History as HistoryIcon,
   Shield,
   Sun,
+  UsersRound,
 } from "lucide-react";
 import type { Library } from "../../services/libraryData";
 import type { Page } from "../../app/routes";
@@ -33,6 +34,10 @@ export function Mine({
       </div>
       <section className="setting-section">
         <h3>数据</h3>
+        <button className="setting-row link-row" onClick={() => onNavigate("accounts")}>
+          <span><UsersRound size={19} />账号管理</span>
+          <ChevronRight size={17} />
+        </button>
         <button
           className="setting-row link-row"
           onClick={() => onNavigate("sync")}
