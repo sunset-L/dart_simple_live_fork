@@ -9,7 +9,6 @@ export const emptyLibrary = (): Library => ({
 
 const storageKey = "simple-live-web.library.v1";
 const migrationKey = `${storageKey}.migrated`;
-const changeKey = `${storageKey}.changed`;
 const listeners = new Set<() => void>();
 let cached = { data: emptyLibrary(), error: "", corrupt: false };
 let revision = "";
@@ -129,14 +128,6 @@ function accept(value: StoredLibrary) {
   publish();
 }
 
-function changed() {
-  try {
-    localStorage.setItem(changeKey, revision);
-  } catch {
-    // Disk persistence does not depend on browser storage being available.
-  }
-}
-
 function mergeLegacy(server: Library, legacy: Library): Library {
   const follows = unique([...legacy.follows, ...server.follows]);
   const histories = new Map(server.histories.map((item) => [item.id, item]));
@@ -209,7 +200,6 @@ export function initializeLibrary(): Promise<void> {
             if (cached.error) throw new Error(cached.error);
           }
         }
-        changed();
       }
       try {
         localStorage.setItem(migrationKey, "1");
@@ -269,7 +259,6 @@ export async function saveLibrary(data: Library) {
   writing = true;
   try {
     accept(await post<StoredLibrary>("library", { revision, data: next }));
-    changed();
   } catch (error) {
     // A conflict reloads the latest data without overwriting another tab's edits.
     try {
@@ -337,7 +326,6 @@ export async function resetLibrary() {
     } else {
       accept(await post<StoredLibrary>("library", { revision, reset: true }));
     }
-    changed();
   } finally {
     writing = false;
   }
@@ -345,22 +333,7 @@ export async function resetLibrary() {
 
 export function watchLibrary(listener: () => void): () => void {
   listeners.add(listener);
-  const reload = () => {
-    if (document.visibilityState !== "hidden")
-      void refreshLibrary().then(flushFollowAvatars);
-  };
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === changeKey) reload();
-  };
-  const timer = setInterval(reload, 5000);
-  window.addEventListener("focus", reload);
-  document.addEventListener("visibilitychange", reload);
-  window.addEventListener("storage", onStorage);
   return () => {
     listeners.delete(listener);
-    clearInterval(timer);
-    window.removeEventListener("focus", reload);
-    document.removeEventListener("visibilitychange", reload);
-    window.removeEventListener("storage", onStorage);
   };
 }

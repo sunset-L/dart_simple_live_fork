@@ -87,7 +87,6 @@ const defaults: Preferences = {
   player: playerDefaults,
 };
 const migrationKey = "simple-live-web.preferences.v1.migrated";
-const changeKey = "simple-live-web.preferences.v1.changed";
 const listeners = new Set<() => void>();
 let stored = legacyPreferences();
 let pending: PreferencePatch = {};
@@ -117,13 +116,6 @@ function accept(value: StoredPreferences) {
   if (!value.data || typeof value.data !== "object" || Array.isArray(value.data))
     throw new Error("本地服务返回了无效设置");
   stored = value.data;
-}
-function changed() {
-  try {
-    localStorage.setItem(changeKey, `${Date.now()}:${Math.random()}`);
-  } catch {
-    // Cross-port updates also use polling and do not rely on browser storage.
-  }
 }
 function message(error: unknown) {
   return error instanceof Error ? error.message : "本地设置读写失败";
@@ -212,7 +204,6 @@ async function flush() {
         );
         inFlight = {};
         publish("");
-        changed();
       } catch (error) {
         inFlight = {};
         publish(`设置保存失败：${message(error)}`);
@@ -236,23 +227,9 @@ export function updatePreferences(patch: PreferencePatch) {
 }
 
 function watchUpdates() {
-  const reload = () => {
-    if (document.visibilityState !== "hidden") void refreshPreferences();
-  };
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === changeKey) reload();
-  };
   const onPageHide = () => void flush();
-  const interval = setInterval(reload, 5000);
-  window.addEventListener("focus", reload);
-  document.addEventListener("visibilitychange", reload);
-  window.addEventListener("storage", onStorage);
   window.addEventListener("pagehide", onPageHide);
   return () => {
-    clearInterval(interval);
-    window.removeEventListener("focus", reload);
-    document.removeEventListener("visibilitychange", reload);
-    window.removeEventListener("storage", onStorage);
     window.removeEventListener("pagehide", onPageHide);
   };
 }

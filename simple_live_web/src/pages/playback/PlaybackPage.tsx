@@ -85,6 +85,11 @@ export function PlaybackPage({
   const currentFollowed = useRef(followed);
   currentFollowed.current = followed;
   const platform = platforms.find((item) => item.id === site);
+  // Douyin's websocket totalUser is not the room's display_value heat metric.
+  const heat =
+    site === "douyin"
+      ? (session.detail?.online ?? 0)
+      : (chat.online ?? session.detail?.online ?? 0);
   const filter = useMemo(
     () => createFilter(data.blocked, settings.fortune),
     [data.blocked, settings.fortune],
@@ -240,7 +245,7 @@ export function PlaybackPage({
                 </span>
                 <span className="room-heat">
                   <Flame size={14} />
-                  {formatHeat(chat.online ?? session.detail?.online ?? 0)}
+                  {formatHeat(heat)}
                 </span>
                 <span className="room-platform">
                   {platform && <img src={`/assets/${platform.logo}`} alt="" />}
