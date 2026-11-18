@@ -133,6 +133,9 @@ class NativePlayerManager private constructor() {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var floatingWindow: FloatingPlayerWindow? = null
+    private var floatingWindowEnabled = true
+    private var floatingWindowCornerRadius = 0f
+    private var floatingWindowDockEnabled = true
 
     /** 方向策略和实际窗口方向分别保存；恢复策略本身不保证厂商小窗转回原方向。 */
     private var orientationBeforeFullscreen: Int? = null
@@ -953,6 +956,21 @@ class NativePlayerManager private constructor() {
                 )
             }
 
+            "setFloatingWindowSettings" -> {
+                val args = arguments as? Map<*, *>
+                floatingWindowEnabled = args?.get("enabled") as? Boolean ?: true
+                val radius = (args?.get("cornerRadius") as? Number)?.toFloat() ?: 0f
+                floatingWindowCornerRadius = if (radius.isFinite()) radius.coerceIn(0f, 16f) else 0f
+                floatingWindowDockEnabled = args?.get("dockEnabled") as? Boolean ?: true
+                floatingWindow?.updateSettings(
+                    floatingWindowCornerRadius,
+                    floatingWindowDockEnabled
+                )
+                // 关闭正在播放的小窗时由现有会话回到直播页，不销毁播放器或断流。
+                if (!floatingWindowEnabled && isFloating) onFloatingTap()
+                result.success(true)
+            }
+
             "enterFloating" -> {
                 val args = arguments as? Map<*, *>
                 val width = (args?.get("width") as? Number)?.toInt() ?: 480
@@ -1706,7 +1724,7 @@ class NativePlayerManager private constructor() {
     // ---------------------------------------------------------------- 悬浮窗
 
     private fun enterFloating(width: Int, height: Int): Boolean {
-        if (isTvDevice()) {
+        if (!floatingWindowEnabled || isTvDevice()) {
             return false
         }
         if (!hasOverlayPermission()) {
@@ -1716,6 +1734,7 @@ class NativePlayerManager private constructor() {
         if (floatingWindow == null) {
             floatingWindow = FloatingPlayerWindow(context, this)
         }
+        floatingWindow?.updateSettings(floatingWindowCornerRadius, floatingWindowDockEnabled)
         val shown = floatingWindow?.show(width, height) ?: false
         if (shown) {
             isFloating = true

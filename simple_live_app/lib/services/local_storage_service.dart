@@ -56,6 +56,12 @@ class LocalStorageService extends GetxService {
   /// （见 [DanmakuShielder]），所以只有一份开关。
   static const String kDanmuShieldFortuneBag = "DanmuShieldFortuneBag";
 
+  /// 小窗启用、圆角（dp）和越界贴边收起。
+  static const String kFloatingWindowEnable = "FloatingWindowEnable";
+  static const String kFloatingWindowCornerRadius =
+      "FloatingWindowCornerRadius";
+  static const String kFloatingWindowDockEnable = "FloatingWindowDockEnable";
+
   /// 小窗显示弹幕
   ///
   /// 关闭时小窗**不建立弹幕连接、不接收任何弹幕数据**，

@@ -49,7 +49,7 @@ import kotlin.math.roundToInt
  *
  * 交互设计：
  * - 关闭图标是一个灰白色的叉，无底色，避免糊在画面上显得笨重；
- *   默认隐藏，触摸小窗时淡入，2 秒无操作后淡出。
+ *   默认隐藏，触摸小窗时淡入，2 秒无操作后淡出，隐藏时关闭热区仍有效。
  * - 轻点小窗 = 回到直播页；拖动 = 移动位置。
  * - 双击小窗 = 在「当前尺寸」与「横向占满」之间切换。
  * - 拖动**允许拖出屏幕边缘**（拖动期间不做边界钳制），松手时再判定：
@@ -81,7 +81,7 @@ class FloatingPlayerWindow(
          *
          * 双指缩放必然是「第一根手指先落、第二根再落」，两指间隔通常
          * 60~200ms。按下即显示会让叉号在缩放前闪一下，
-         * 且淡入动画 + 随即 GONE 的重排会在手势开始的那一刻造成卡顿。
+         * 第一根手指落下就显示，会在手势开始时闪过叉号。
          * 延迟到 180ms 之后，缩放开始时把它取消，叉号就完全不出现。
          */
         private const val CLOSE_BUTTON_SHOW_DELAY = 180L
@@ -91,7 +91,7 @@ class FloatingPlayerWindow(
 
         /** 贴边 / 横向占满时与屏幕边缘保留的间隙 */
         private const val EDGE_PADDING_DP = 6f
-        private const val CORNER_RADIUS_DP = 16f
+        private const val MAX_CORNER_RADIUS_DP = 16f
 
         /**
          * 底部最小间隙。
@@ -229,6 +229,8 @@ class FloatingPlayerWindow(
 
     private var rootView: FrameLayout? = null
     private var videoSurface: Surface? = null
+    private var cornerRadiusDp = 0f
+    private var dockEnabled = true
     private var closeButton: ImageView? = null
     private var dockHandle: ImageView? = null
     private var dockedSide: DockSide? = null
@@ -332,20 +334,29 @@ class FloatingPlayerWindow(
     private var pendingSingleTap: Runnable? = null
 
     private val hideCloseRunnable = Runnable {
-        closeButton?.animate()?.alpha(0f)?.setDuration(200)?.withEndAction {
-            closeButton?.visibility = View.GONE
-        }?.start()
+        closeButton?.animate()?.alpha(0f)?.setDuration(200)?.start()
     }
 
     /**
      * 延迟显示关闭按钮。
      *
      * 双指缩放必然是「先一根手指落下、再落第二根」，如果按下就立刻显示，
-     * 叉号会在缩放开始前闪一下（并且触发一次淡入动画 + 一次 GONE 重排），
+     * 叉号会在缩放开始前闪一下，
      * 观感就是「显示一下就卡一下」。延迟到第二根手指通常会落下的时间之后，
      * 缩放开始时把它取消掉，叉号就完全不会出现。
      */
     private val showCloseRunnable = Runnable { showCloseButton() }
+
+    fun updateSettings(radiusDp: Float, enableDock: Boolean) {
+        cornerRadiusDp = if (radiusDp.isFinite()) radiusDp.coerceIn(0f, MAX_CORNER_RADIUS_DP) else 0f
+        rootView?.invalidateOutline()
+        dockEnabled = enableDock
+        if (!enableDock) {
+            rememberedDockSide = null
+            if (dockedSide != null) restoreDockedWindow(animate = false)
+            if (pendingEdgeAction == EdgeAction.DOCK) hideEdgeHint()
+        }
+    }
 
     fun show(width: Int, height: Int): Boolean {
         if (isShowing) {
@@ -369,10 +380,13 @@ class FloatingPlayerWindow(
             baseHeightPx = h
         }
         isFullWidth = false
-        dockedSide = rememberedDockSide
+        dockedSide = if (dockEnabled) rememberedDockSide else null
 
         screenArea = currentScreenArea()
         val container = object : FrameLayout(context) {
+            // 统一处理关闭热区和多指手势，避免子按钮吞掉缩放的第一根手指。
+            override fun onInterceptTouchEvent(event: MotionEvent): Boolean = true
+
             override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
                 super.onSizeChanged(w, h, oldw, oldh)
                 invalidateOutline()
@@ -422,7 +436,7 @@ class FloatingPlayerWindow(
         container.clipToOutline = true
         container.outlineProvider = object : ViewOutlineProvider() {
             override fun getOutline(view: View, outline: Outline) {
-                val radius = min(CORNER_RADIUS_DP * density, min(view.width, view.height) / 2f)
+                val radius = min(cornerRadiusDp * density, min(view.width, view.height) / 2f)
                 outline.setRoundRect(0, 0, view.width, view.height, radius)
             }
         }
@@ -449,7 +463,6 @@ class FloatingPlayerWindow(
         // 关闭按钮：只有一个灰白色的叉，无底色
         val closeBtn = ImageView(context).apply {
             setImageDrawable(CrossDrawable())
-            visibility = View.GONE
             alpha = 0f
             scaleType = ImageView.ScaleType.CENTER_INSIDE
             contentDescription = "关闭小窗"
@@ -566,11 +579,15 @@ class FloatingPlayerWindow(
         var startX = 0
         var startY = 0
         var dragging = false
+        var pressedCloseButton = false
         // 只有跨入新的有效档位才震动，不在每个 MOVE 上重复触发。
         var edgeAction = EdgeAction.NONE
         // 收起态本来就超过半宽：恢复操作不能因此直接触发关闭。
         var dragFromDock: DockSide? = null
         val dragSlop = DRAG_SLOP_DP * density
+        fun inCloseButton(event: MotionEvent): Boolean =
+            event.x >= closeBtn.left && event.x < closeBtn.right &&
+                event.y >= closeBtn.top && event.y < closeBtn.bottom
 
         // 速度采样器：只在一次手势内有意义，每次 show() 换一份新的
         velocityTracker?.recycle()
@@ -690,6 +707,7 @@ class FloatingPlayerWindow(
 
         container.setOnTouchListener { _, event ->
             if (event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
+                pressedCloseButton = false
                 multiTouch = true
                 if (pinch == null) beginPinch(rawPoints(event))
                 return@setOnTouchListener true
@@ -713,6 +731,7 @@ class FloatingPlayerWindow(
 
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
+                    pressedCloseButton = inCloseButton(event)
                     // 先接管正在运动的窗口，再捕获拖动基准，避免旧动画抢回位置。
                     cancelSnapAnimation()
                     cancelPendingLayoutUpdate()
@@ -735,8 +754,7 @@ class FloatingPlayerWindow(
                     // DOWN 也保留为基准；不能先采样再 clear 掉它。
                     addDragSample(event.eventTime, event.rawX, event.rawY, MotionEvent.ACTION_DOWN)
                     // 不立刻显示叉号：双指缩放必然是「一指先落、第二指再落」，
-                    // 立刻显示会在缩放开始前闪一下（淡入动画 + GONE 重排各一次，
-                    // 观感就是「显示一下就卡一下」）。延迟一点，缩放开始时取消即可。
+                    // 立刻显示会在缩放开始前闪一下。延迟一点，缩放开始时取消即可。
                     if (dragFromDock == null) scheduleShowCloseButton()
                     true
                 }
@@ -792,7 +810,11 @@ class FloatingPlayerWindow(
                         applyWindowLayout()
                     }
                     if (!dragging) {
-                        handleTap()
+                        if (pressedCloseButton && inCloseButton(event)) {
+                            closeBtn.performClick()
+                        } else {
+                            handleTap()
+                        }
                     } else {
                         edgeAction = EdgeAction.NONE
                         hideEdgeHint()
@@ -1109,7 +1131,7 @@ class FloatingPlayerWindow(
         val out = edgeOverflow(lp, overflowingSide(lp))
         return when {
             out > lp.width * DISMISS_THRESHOLD -> EdgeAction.DISMISS
-            out >= lp.width * DOCK_THRESHOLD -> EdgeAction.DOCK
+            dockEnabled && out >= lp.width * DOCK_THRESHOLD -> EdgeAction.DOCK
             else -> EdgeAction.NONE
         }
     }
@@ -1135,6 +1157,10 @@ class FloatingPlayerWindow(
     }
 
     private fun dockWindow(lp: WindowManager.LayoutParams, side: DockSide) {
+        if (!dockEnabled) {
+            clampIntoScreen(lp, animate = true)
+            return
+        }
         cancelPendingLayoutUpdate()
         cancelPendingSingleTap()
         hideCloseButtonImmediately()
@@ -1888,10 +1914,7 @@ class FloatingPlayerWindow(
         val btn = closeButton ?: return
         mainHandler.removeCallbacks(showCloseRunnable)
         mainHandler.removeCallbacks(hideCloseRunnable)
-        if (btn.visibility != View.VISIBLE) {
-            btn.visibility = View.VISIBLE
-            btn.alpha = 0f
-        }
+        btn.animate().cancel()
         btn.animate().alpha(1f).setDuration(150).start()
         scheduleHideCloseButton()
     }
@@ -1921,7 +1944,6 @@ class FloatingPlayerWindow(
         mainHandler.removeCallbacks(hideCloseRunnable)
         closeButton?.animate()?.cancel()
         closeButton?.alpha = 0f
-        closeButton?.visibility = View.GONE
     }
 
     private fun releaseVideoSurface(surface: Surface? = videoSurface) {

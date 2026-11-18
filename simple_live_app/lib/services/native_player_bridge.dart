@@ -582,6 +582,18 @@ class NativePlayerBridge {
     }
   }
 
+  Future<void> setFloatingWindowSettings({
+    required bool enabled,
+    required double cornerRadius,
+    required bool dockEnabled,
+  }) async {
+    await _method.invokeMethod("setFloatingWindowSettings", {
+      "enabled": enabled,
+      "cornerRadius": cornerRadius,
+      "dockEnabled": dockEnabled,
+    });
+  }
+
   /// 进入悬浮小窗
   Future<bool> enterFloating({
     int width = 480,

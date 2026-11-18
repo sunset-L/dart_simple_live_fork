@@ -27,6 +27,9 @@ class RoutePath {
   /// 小窗弹幕设置（与小窗画面尺度匹配的一套独立配置）
   static const kSettingsFloatingDanmu = "/settings/danmu/floating";
 
+  /// 小窗设置
+  static const kSettingsFloatingWindow = "/settings/floating";
+
   /// 其他设置
   static const kSettingsOther = "/settings/other";
 

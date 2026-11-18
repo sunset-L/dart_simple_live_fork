@@ -1519,8 +1519,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 是否正在进入悬浮窗（防止重复触发）
   bool _enteringFloating = false;
 
-  /// 悬浮窗功能是否可用（TV 端禁用）
-  bool get floatingEnabled => !isTvDevice;
+  /// TV 端禁用，用户关闭后也不在返回直播间时自动开窗。
+  bool get floatingEnabled =>
+      !isTvDevice && AppSettingsController.instance.floatingWindowEnable.value;
 
   /// 进入悬浮小窗
   ///
@@ -1544,7 +1545,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     try {
       // 检查悬浮窗权限
       await refreshOverlayPermission();
-      if (_closingLiveRoom || _disposed) return false;
+      if (_closingLiveRoom || _disposed || !floatingEnabled) return false;
       if (!hasOverlayPermission.value) {
         SmartDialog.showToast("请先授予悬浮窗权限");
         await nativePlayer.requestOverlayPermission();
@@ -1559,12 +1560,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       }
       final heightDp = widthDp / ratio;
 
+      await AppSettingsController.instance.syncFloatingWindowSettings();
+      if (_closingLiveRoom || _disposed || !floatingEnabled) return false;
       final success = await nativePlayer.enterFloating(
         width: widthDp.round(),
         height: heightDp.round(),
       );
 
-      if (_closingLiveRoom || _disposed) {
+      if (_closingLiveRoom || _disposed || !floatingEnabled) {
         if (success) await nativePlayer.exitFloating();
         return false;
       }

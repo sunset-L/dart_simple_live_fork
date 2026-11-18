@@ -42,6 +42,15 @@ class AppSettingsController extends GetxController {
     danmuFontWeight.value = LocalStorageService.instance
         .getValue(LocalStorageService.kDanmuFontWeight, 4);
 
+    floatingWindowEnable.value = LocalStorageService.instance
+        .getValue(LocalStorageService.kFloatingWindowEnable, true);
+    floatingWindowCornerRadius.value = LocalStorageService.instance
+        .getValue<num>(LocalStorageService.kFloatingWindowCornerRadius, 0)
+        .toInt()
+        .clamp(0, 16);
+    floatingWindowDockEnable.value = LocalStorageService.instance
+        .getValue(LocalStorageService.kFloatingWindowDockEnable, true);
+
     // 小窗弹幕默认关闭：小窗场景优先省电省流量，
     // 用户想在小窗看弹幕需要自己打开。
     floatingDanmuEnable.value = LocalStorageService.instance
@@ -145,6 +154,7 @@ class AppSettingsController extends GetxController {
     initHomeSort();
 
     super.onInit();
+    syncFloatingWindowSettings();
   }
 
   void initSiteSort() {
@@ -282,6 +292,45 @@ class AppSettingsController extends GetxController {
     danmuFontWeight.value = e;
     LocalStorageService.instance
         .setValue(LocalStorageService.kDanmuFontWeight, e);
+  }
+
+  var floatingWindowEnable = true.obs;
+  void setFloatingWindowEnable(bool value) {
+    floatingWindowEnable.value = value;
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kFloatingWindowEnable, value);
+    syncFloatingWindowSettings();
+  }
+
+  var floatingWindowCornerRadius = 0.obs;
+  void setFloatingWindowCornerRadius(int value) {
+    final radius = value.clamp(0, 16);
+    floatingWindowCornerRadius.value = radius;
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kFloatingWindowCornerRadius, radius);
+    syncFloatingWindowSettings();
+  }
+
+  var floatingWindowDockEnable = true.obs;
+  void setFloatingWindowDockEnable(bool value) {
+    floatingWindowDockEnable.value = value;
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kFloatingWindowDockEnable, value);
+    syncFloatingWindowSettings();
+  }
+
+  /// 原生小窗可跨 Flutter 引擎存活，启动、进入小窗和修改设置时均同步。
+  Future<void> syncFloatingWindowSettings() async {
+    if (!GetPlatform.isAndroid) return;
+    try {
+      await NativePlayerBridge.instance.setFloatingWindowSettings(
+        enabled: floatingWindowEnable.value,
+        cornerRadius: floatingWindowCornerRadius.value.toDouble(),
+        dockEnabled: floatingWindowDockEnable.value,
+      );
+    } catch (e) {
+      Log.logPrint(e);
+    }
   }
 
   /// 小窗是否显示弹幕
