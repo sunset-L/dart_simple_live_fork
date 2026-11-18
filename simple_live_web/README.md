@@ -6,10 +6,11 @@
 
 使用 Windows 10/11 x64，从完整仓库中的 `simple_live_web` 目录双击 **`start.bat`**：
 
-- 自动检查 Node.js、完整 Dart SDK、Git、项目锁文件及随项目提供的 QuickJS DLL。必须同时保留相邻的 `simple_live_core` 和其中的 `packages/tars_dart`，不能只复制网页目录。
-- 首次缺少工具或需要初始化/更新项目依赖时，先显示安装清单、用途、下载来源、存放位置和手动替代方案。**按 Enter 才开始准备，输入其他内容则取消**；不会自动接受安装。
+- 自动检查 Node.js、完整 Dart SDK、Git 及随项目提供的 QuickJS DLL，准备依赖时必须保留已提交的锁文件。必须同时保留相邻的 `simple_live_core` 和其中的 `packages/tars_dart`，不能只复制网页目录。
+- 优先用已有 Node.js、Dart SDK 和项目依赖直接启动，不因首次使用 BAT、缺少启动记录或没有 Git 就要求重新安装。已有依赖的正常启动不需要 Git，也不执行 `npm ci` 或 `pub get`。
+- **只有直接启动失败才提示准备环境**：先关闭本次尝试的全部服务、显示错误原因，再列出缺少的工具及依赖准备命令。缺少工具时说明用途、来源和手动替代方案；工具齐全时明确只重新准备项目依赖，不下载安装开发工具。**按 Enter 才开始准备并重试一次，输入其他内容则取消**。
 - 优先复用已有工具。缺少时下载下表中的 Windows x64 便携版到 `.runtime`，校验固定 SHA-256 后解压，不写系统 PATH、注册表或全局安装目录；下载显示进度，解压和依赖安装显示阶段及命令输出。
-- npm 依赖使用 `npm ci --progress=true --no-audit --no-fund`；Dart 使用 `dart pub get --enforce-lockfile`，保留已提交的版本和 Git 提交号，不执行升级或原生 C++ 构建。首次通过启动器准备一次后，后续根据工具版本、锁文件和缓存是否有效决定是否重新准备，不是每次都获取依赖。
+- 启动失败且确认准备时，npm 使用 `npm ci --progress=true --no-audit --no-fund`；Dart 使用 `dart pub get --enforce-lockfile`，保留已提交的版本和 Git 提交号，不执行升级或原生 C++ 构建。重试仍失败时保留错误提示，不循环安装。权限、网络或配置问题不一定能通过准备依赖解决，可取消并手动处理。
 - 前后端均准备就绪后，窗口打印**实际网页访问地址**、API 地址和本机数据目录。默认网页端口 23236、API 23238；占用时向后选择空闲端口，网页与 API 不共用端口，也不会停止其他会话的服务。以窗口输出为准，不把 API 地址当作网页入口。
 - 所有进程都属于本次窗口的 Windows Job Object。**关闭窗口或按 Ctrl+C 会关闭本次前端、Dart 后端及子进程**；准备过程中关闭窗口，也不会留下安装命令继续运行。任一服务异常退出时，启动器退出并清理本次服务，保留错误提示等待按键。
 - 无目录写权限、工具被系统策略拦截、下载失败或解压失败时，窗口提示手动处理后重新打开 `start.bat`；不自动提权，也不要求安装庞大的构建工具链。
@@ -46,7 +47,6 @@ simple_live_web/
     git/cmd/git.exe                 MinGit ZIP 的内容
     pub-cache/                      默认 Dart 包缓存
     downloads/                      已校验的下载包
-    dependencies.json               启动器依赖准备记录
 ```
 
 只把完整仓库放在个人可写目录即可，不需要管理员权限。不要关闭系统安全策略；策略不允许 PowerShell 时请使用下方的手动双终端启动方式。安装失败可重新运行：已成功准备的工具会复用，下载不完整或校验失败的文件不会执行。旧便携工具被替换时保留为 `.runtime/previous-*`，不会删除系统中的工具。
@@ -61,7 +61,7 @@ simple_live_web/
 | `PORT` | API 优先端口，双击启动默认 23238；手动 `npm run server` 默认 23236 |
 | `DART_EXECUTABLE` | 完整 SDK 的 `dart.exe` 路径；其次查找项目便携版、仓库已有 FVM SDK、PATH |
 | `SIMPLE_LIVE_DATA_DIR` | 可选的本机数据目录；不设置时 Windows 使用 `%APPDATA%\simple-live-web` |
-| `PUB_CACHE` | 启动器未指定时使用 `.runtime/pub-cache`；显式指定时沿用指定目录 |
+| `PUB_CACHE` | 仅在确认获取依赖时，未指定则使用 `.runtime/pub-cache`；显式指定时沿用指定目录；直接启动复用已有包路径 |
 | `PUB_HOSTED_URL`、npm 自有配置 | 保留已有包源/网络配置，不自动修改；使用可信源 |
 | `SIMPLE_LIVE_SERVE_STATIC` | 双击启动固定为 `0`，不提供可能过期的 `dist` 网页 |
 

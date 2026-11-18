@@ -14,12 +14,9 @@ function Quote-Argument([string]$Value) {
     '"' + [regex]::Replace($escaped, '(\\+)$', '$1$1') + '"'
 }
 
-# Start the worker suspended, then put it in a kill-on-close job before it can
-# spawn installers or servers. Console close does not reliably run PS finally.
-if (-not $Worker) {
-    $group = $null
-    try {
-        Add-Type -TypeDefinition @'
+function Initialize-ProcessGroup {
+    if ('SimpleLiveProcessGroup' -as [type]) { return }
+    Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -123,6 +120,14 @@ public sealed class SimpleLiveProcessGroup : IDisposable {
     }
 }
 '@
+}
+
+# Assign suspended children before resuming them. An outer job owns the worker;
+# a nested job can clean up a failed startup without closing the setup prompt.
+if (-not $Worker) {
+    $group = $null
+    try {
+        Initialize-ProcessGroup
         $group = New-Object SimpleLiveProcessGroup
         $powershell = Join-Path $PSHOME 'powershell.exe'
         $arguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File ' +
@@ -222,22 +227,6 @@ function Find-Tools {
         }
     }
     @{ node = $node; dart = $dart; git = $git }
-}
-
-function Get-Fingerprint([string[]]$Files, [string]$Context) {
-    $parts = @($Context)
-    foreach ($file in $Files) {
-        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
-            throw "缺少项目文件：$file，请获取完整仓库和已提交的锁文件"
-        }
-        $parts += (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
-    }
-    $sha = [Security.Cryptography.SHA256]::Create()
-    try {
-        [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes(
-            ($parts -join "`n")
-        ))).Replace('-', '').ToLowerInvariant()
-    } finally { $sha.Dispose() }
 }
 
 function Has-PackageConfig {
@@ -392,6 +381,46 @@ function Wait-Ready([Diagnostics.Process]$Process, [string]$Url, [bool]$Api) {
     throw '服务启动超时，请检查上方输出；可重新启动或手动指定空闲端口'
 }
 
+function Start-Services([hashtable]$Tools, [int]$WebPort, [int]$ApiPort) {
+    if (-not $Tools.node -or -not $Tools.dart) {
+        throw '未找到可用的 Node.js 或完整 Dart SDK，无法直接启动'
+    }
+    Initialize-ProcessGroup
+    $services = New-Object SimpleLiveProcessGroup
+    $api = $null
+    $web = $null
+    try {
+        $env:DART_EXECUTABLE = $Tools.dart.path
+        $paths = @((Split-Path $Tools.node.path), (Split-Path $Tools.dart.path))
+        if ($Tools.git) { $paths += Split-Path $Tools.git.path }
+        $env:PATH = ($paths -join ';') + ';' + $env:PATH
+        $env:PORT = "$ApiPort"
+        $env:SIMPLE_LIVE_SERVE_STATIC = '0'
+        Write-Host ''
+        Write-Host '正在启动 Dart API（使用预编译 QuickJS，不进行前端 build）...' -ForegroundColor Cyan
+        $api = $services.Start(
+            $Tools.node.path, (Quote-Argument (Join-Path $root 'scripts\serve.mjs')), $root
+        )
+        Wait-Ready $api "http://127.0.0.1:$ApiPort/api/health" $true
+        Write-Host '正在启动 Vite 开发服务...' -ForegroundColor Cyan
+        $arguments = (Quote-Argument (Join-Path $root 'node_modules\vite\bin\vite.js')) +
+            " --host 127.0.0.1 --port $WebPort --strictPort"
+        $web = $services.Start($Tools.node.path, $arguments, $root)
+        Wait-Ready $web "http://127.0.0.1:$WebPort/" $false
+        return @{ group = $services; api = $api; web = $web }
+    } catch {
+        $services.Dispose()
+        foreach ($process in @($api, $web)) {
+            if ($process) {
+                $process.WaitForExit(5000) | Out-Null
+                $process.Dispose()
+            }
+        }
+        throw
+    }
+}
+
+$running = $null
 try {
     if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or
         $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64' -or -not [Environment]::Is64BitOperatingSystem) {
@@ -423,45 +452,54 @@ try {
         }
     }
     $tools = Find-Tools
-    $missing = @('node', 'dart', 'git' | Where-Object { -not $tools[$_] })
-    if (-not $env:PUB_CACHE) { $env:PUB_CACHE = Join-Path $runtime 'pub-cache' }
-    $receiptFile = Join-Path $runtime 'dependencies.json'
-    $receipt = $null
-    try { $receipt = Get-Content -LiteralPath $receiptFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
-    $npmFingerprint = Get-Fingerprint @('package.json', 'package-lock.json') "$root|$($tools.node.version)|win-x64"
-    $dartFingerprint = Get-Fingerprint @(
-        'pubspec.yaml', 'pubspec.lock', '..\simple_live_core\pubspec.yaml',
-        '..\simple_live_core\packages\tars_dart\pubspec.yaml'
-    ) "$root|$($tools.dart.version)|$env:PUB_CACHE"
-    $needNpm = -not $tools.node -or $receipt.npm -ne $npmFingerprint -or
-        -not (Test-Path -LiteralPath 'node_modules\vite\bin\vite.js') -or
-        -not (Test-Path -LiteralPath 'node_modules\typescript\bin\tsc')
-    $needDart = -not $tools.dart -or $receipt.dart -ne $dartFingerprint -or -not (Has-PackageConfig)
     Write-Host 'Simple Live Web - Windows 开发模式' -ForegroundColor Cyan
     foreach ($name in @('node', 'dart', 'git')) {
         if ($tools[$name]) { Write-Host "$name : $($tools[$name].version)  $($tools[$name].path)" }
         else { Write-Host "$name : 缺少或版本/架构不符合要求" -ForegroundColor Yellow }
     }
-    Write-Host "npm 依赖需初始化/更新：$needNpm；Dart 依赖需初始化/更新：$needDart"
     if ($CheckOnly) {
+        Write-Host "npm 启动入口存在：$(Test-Path -LiteralPath 'node_modules\vite\bin\vite.js')；Dart 包路径有效：$(Has-PackageConfig)"
+        Write-Host '正常启动时优先直接运行现有环境，只有启动失败才提示准备工具或依赖。'
         Write-Host '仅检查环境，未下载、安装、获取依赖或启动服务。'
         exit 0
     }
-    if ($missing.Count -or $needNpm -or $needDart) {
+    $webPort = Select-Port $env:SIMPLE_LIVE_WEB_PORT 23236 @()
+    $apiPort = Select-Port $env:PORT 23238 @($webPort)
+    Write-Host '先使用现有工具和项目依赖直接启动，不下载安装。'
+    try {
+        $running = Start-Services $tools $webPort $apiPort
+    } catch {
         Write-Host ''
-        Write-Host '首次启动或依赖变化，需要执行以下准备：' -ForegroundColor Yellow
+        Write-Host "直接启动失败：$($_.Exception.Message)" -ForegroundColor Red
+        Write-Host '本次尝试启动的服务已关闭，请先查看上方错误。'
+    }
+    if (-not $running) {
+        $missing = @('node', 'dart', 'git' | Where-Object { -not $tools[$_] })
+        Write-Host ''
+        Write-Host '可按锁文件准备项目依赖后重试，以下操作需要确认：' -ForegroundColor Yellow
         foreach ($name in $missing) {
             Write-Host "  $name $($packages[$name].version) 便携版 -> .runtime\$($packages[$name].target)"
             Write-Host "  来源：$($packages[$name].url)"
         }
-        Write-Host '用途：Node/npm 运行前端；Dart 运行 API；Git 获取锁定的 Git 依赖。'
-        if ($needNpm) { Write-Host '  npm ci --progress=true --no-audit --no-fund：按 package-lock 安装项目依赖。' }
-        if ($needDart) { Write-Host '  dart pub get --enforce-lockfile：按 pubspec.lock 获取 Dart 包，不更新锁文件。' }
+        if ($missing.Count) {
+            Write-Host '用途：Node/npm 运行前端；Dart 运行 API；Git 获取锁定的 Git 依赖。'
+            Write-Host '缺少的工具仅解压到项目 .runtime；不改系统 PATH、注册表或安装全局软件。'
+        } else {
+            Write-Host '工具已齐全，不会下载安装 Node.js、Dart 或 Git，仅重新准备项目依赖。'
+        }
+        Write-Host '  npm ci --progress=true --no-audit --no-fund：按 package-lock 重新安装项目依赖。'
+        Write-Host '  dart pub get --enforce-lockfile：按 pubspec.lock 获取 Dart 包，不更新锁文件。'
         Write-Host 'QuickJS DLL 已自带；无需浏览器插件、Flutter、Visual Studio 或 Windows SDK。'
-        Write-Host '工具仅解压到项目 .runtime；不改系统 PATH、注册表或安装全局软件。'
-        Write-Host '替代方案：自行安装上述工具，或复用已有 SDK，手动准备依赖。'
-        $answer = Read-Host '按 Enter 同意下载安装和获取依赖，输入其他内容取消'
-        if ($answer -ne '') { Write-Host '已取消，未下载安装。'; exit 0 }
+        Write-Host '依赖准备不一定能解决权限、端口或配置问题；也可按错误提示手动处理后重新打开。'
+        $prompt = '按 Enter 同意重新准备项目依赖并重试，输入其他内容取消'
+        if ($missing.Count) { $prompt = '按 Enter 同意下载缺少的工具、准备项目依赖并重试，输入其他内容取消' }
+        $answer = Read-Host $prompt
+        if ($answer -ne '') { Write-Host '已取消，未下载工具或更改项目依赖。'; exit 0 }
+        foreach ($file in @('package-lock.json', 'pubspec.lock')) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+                throw "缺少 $file，请恢复已提交的锁文件后重试"
+            }
+        }
         New-Item -ItemType Directory -Path $runtime -Force | Out-Null
         $probeFile = Assert-RuntimePath (Join-Path $runtime ([Guid]::NewGuid().ToString('N') + '.tmp'))
         [IO.File]::WriteAllText($probeFile, 'write-check')
@@ -471,43 +509,16 @@ try {
         if (-not $tools.node -or -not $tools.dart -or -not $tools.git) {
             throw '工具安装后仍不满足要求，请按手动安装说明处理'
         }
-    }
-    $env:DART_EXECUTABLE = $tools.dart.path
-    $env:PATH = (Split-Path $tools.node.path) + ';' + (Split-Path $tools.dart.path) +
-        ';' + (Split-Path $tools.git.path) + ';' + $env:PATH
-    if ($needNpm) {
+        $env:DART_EXECUTABLE = $tools.dart.path
+        $env:PATH = (Split-Path $tools.node.path) + ';' + (Split-Path $tools.dart.path) +
+            ';' + (Split-Path $tools.git.path) + ';' + $env:PATH
+        if (-not $env:PUB_CACHE) { $env:PUB_CACHE = Join-Path $runtime 'pub-cache' }
         $npmCli = Join-Path (Split-Path $tools.node.path) 'node_modules\npm\bin\npm-cli.js'
         Run-Command $tools.node.path @($npmCli, 'ci', '--progress=true', '--no-audit', '--no-fund') '安装 npm 项目依赖'
-    }
-    if ($needDart) {
         Run-Command $tools.dart.path @('pub', 'get', '--enforce-lockfile') '获取锁定的 Dart 依赖'
+        Write-Host '准备完成，正在重新启动；若仍失败则显示原因，不重复要求下载安装。'
+        $running = Start-Services $tools $webPort $apiPort
     }
-    if ($needNpm -or $needDart) {
-        $record = @{
-            npm = Get-Fingerprint @('package.json', 'package-lock.json') "$root|$($tools.node.version)|win-x64"
-            dart = Get-Fingerprint @(
-                'pubspec.yaml', 'pubspec.lock', '..\simple_live_core\pubspec.yaml',
-                '..\simple_live_core\packages\tars_dart\pubspec.yaml'
-            ) "$root|$($tools.dart.version)|$env:PUB_CACHE"
-        }
-        [IO.File]::WriteAllText($receiptFile, ($record | ConvertTo-Json), [Text.Encoding]::UTF8)
-    }
-    $webPort = Select-Port $env:SIMPLE_LIVE_WEB_PORT 23236 @()
-    $apiPort = Select-Port $env:PORT 23238 @($webPort)
-    $env:PORT = "$apiPort"
-    $env:SIMPLE_LIVE_SERVE_STATIC = '0'
-    Write-Host ''
-    Write-Host '正在启动 Dart API（使用预编译 QuickJS，不进行前端 build）...' -ForegroundColor Cyan
-    $api = Start-Process -FilePath $tools.node.path -ArgumentList @(
-        (Quote-Argument (Join-Path $root 'scripts\serve.mjs'))
-    ) -WorkingDirectory $root -NoNewWindow -PassThru
-    Wait-Ready $api "http://127.0.0.1:$apiPort/api/health" $true
-    Write-Host '正在启动 Vite 开发服务...' -ForegroundColor Cyan
-    $web = Start-Process -FilePath $tools.node.path -ArgumentList @(
-        (Quote-Argument (Join-Path $root 'node_modules\vite\bin\vite.js')),
-        '--host', '127.0.0.1', '--port', "$webPort", '--strictPort'
-    ) -WorkingDirectory $root -NoNewWindow -PassThru
-    Wait-Ready $web "http://127.0.0.1:$webPort/" $false
     Write-Host ''
     Write-Host "网页访问地址：http://127.0.0.1:$webPort" -ForegroundColor Green
     Write-Host "API 地址：http://127.0.0.1:$apiPort （不是网页入口）"
@@ -515,7 +526,7 @@ try {
     Write-Host '关闭此窗口或按 Ctrl+C，会关闭本次启动的所有服务；不会关闭其他窗口的服务。'
     Write-Host '前端支持热更新；修改 Dart 后端后请关闭窗口，再双击 start.bat。'
     while ($true) {
-        if ($api.HasExited -or $web.HasExited) { throw '一个服务已退出，正在关闭本次启动的所有服务' }
+        if ($running.api.HasExited -or $running.web.HasExited) { throw '一个服务已退出，正在关闭本次启动的所有服务' }
         Start-Sleep -Seconds 1
     }
 } catch {
@@ -523,4 +534,10 @@ try {
     Write-Host "启动失败：$($_.Exception.Message)" -ForegroundColor Red
     Show-ManualSetup
     exit 1
+} finally {
+    if ($running) {
+        $running.group.Dispose()
+        $running.api.Dispose()
+        $running.web.Dispose()
+    }
 }
