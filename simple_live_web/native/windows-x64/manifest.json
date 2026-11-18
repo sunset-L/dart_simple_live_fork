@@ -1,0 +1,13 @@
+{
+  "package": "dart_quickjs",
+  "version": "1.0.0",
+  "source": "https://github.com/xiaoyaocz/dart_quickjs",
+  "revision": "a31682801e209f925cdb90fcf4e379e512b713d2",
+  "architecture": "windows_x64",
+  "library": "dart_quickjs.dll",
+  "assetId": "package:dart_quickjs/src/quickjs_bindings.g.dart",
+  "sha256": "384f87a6b8a88b116a295f37c8622abf29c1f07f836213dff8721d7c16689849",
+  "sourceSha256": "6add6ea0280a0ba90c8099a46e1c9e25883f5206389b48839d615504242181fe",
+  "dependencies": ["KERNEL32.dll"],
+  "builtWith": "MSVC 14.44.35207, Dart 3.13.1, Flutter 3.47.1"
+}

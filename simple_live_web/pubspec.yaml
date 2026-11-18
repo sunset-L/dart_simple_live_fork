@@ -7,6 +7,9 @@ environment:
 dependencies:
   simple_live_core:
     path: ../simple_live_core
+  dart_quickjs:
+    git:
+      url: https://github.com/xiaoyaocz/dart_quickjs
   dio: ^5.9.0
 dev_dependencies:
   lints: ^2.0.0

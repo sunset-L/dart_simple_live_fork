@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dart_quickjs/dart_quickjs.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
 import 'danmaku/danmaku_service.dart';
@@ -29,6 +30,16 @@ final liveStatuses = LiveStatusRoutes(sites);
 Future<void> main() async {
   CoreLog.enableLog = false;
   CoreLog.requestLogType = RequestLogType.none;
+  if (!const bool.fromEnvironment('SIMPLE_LIVE_NO_NATIVE')) {
+    try {
+      final runtime = JsRuntime();
+      runtime.dispose();
+    } catch (error) {
+      stderr.writeln('QuickJS 运行库初始化失败，服务未启动：$error');
+      exitCode = 1;
+      return;
+    }
+  }
   final port = int.parse(Platform.environment['PORT'] ?? '23236');
   final server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
   stdout.writeln('Simple Live Web: http://127.0.0.1:$port');

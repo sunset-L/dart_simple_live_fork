@@ -4,7 +4,7 @@
 
 ## 运行
 
-需要 Node.js 22.12+（本机使用 24）及 Dart 3.10+。本仓库的 Flutter 3.47.1 已包含所需 Dart SDK。
+需要 Node.js 22.12+（本机使用 24）、完整 Dart SDK 3.10+ 和 Git（用于获取已有 Git 依赖）。本仓库的 Flutter 3.47.1 已包含所需 Dart SDK。Windows x64 网页开发不需要 Visual Studio 生成工具、Visual Studio Installer、Windows SDK、Windows SDK AddOn 或编辑器字体。
 
 默认使用本地开发模式，在本目录执行（已安装依赖时无需重复获取）：
 
@@ -26,15 +26,19 @@ npm run server
 
 直播列表、搜索和分类使用相对路径依赖 `../simple_live_core`，不复制平台解析逻辑。React + TypeScript + Ant Design 负责浏览器界面，本地 Dart 服务处理跨域接口请求。
 
-默认启动通过 `dart run` 构建 QuickJS 原生依赖，斗鱼签名取流也需要它。Windows 需要 Visual Studio 2022 Build Tools 的 C++ 桌面开发工具与 Windows SDK。Linux/macOS 需要相应 C 工具链。
+Windows x64 默认加载随项目提交的 `native/windows-x64/dart_quickjs.dll`。这个约 1.2 MB 的运行库只依赖 Windows 自带的 `KERNEL32.dll`，无需 Visual Studio、Windows SDK 或额外 VC++ 运行库。启动器校验文件完整性和依赖源码版本，用 Dart SDK 自带的 kernel 编译器生成后端程序，显式登记 DLL，再直接运行；不触发 C++ 编译，也不会自动下载或安装系统工具。修改后端代码后重启即可，清空启动缓存也会重新生成，DLL 不在缓存目录中。
 
-`npm run server:native` 是默认完整模式的别名。没有原生工具链时可以使用降级模式：
+换到另一台 Windows x64 电脑时，保留此目录、许可证及依赖锁文件，准备已有的 Node.js、完整 Dart SDK 和 Git，执行上述依赖获取与启动命令即可。`DART_EXECUTABLE` 可指向独立 Dart SDK 的 `dart.exe`，无需另外安装 Flutter 来开发网页。具体来源、版本与更新规则见 `native/windows-x64/README.md`。更新 QuickJS 依赖时必须同步提供配套 DLL，版本不匹配会明确报错；需要安装新工具时先征求用户同意。
+
+这只改变 Windows 网页后端的启动，不修改 core、Android 或其他 Flutter 客户端。Linux/macOS 仍使用 `dart run` 及对应 C 工具链，Windows ARM64 暂未提供专用运行库。不要绕过启动脚本直接执行 `dart run bin/server.dart`，那仍会进入上游原生编译流程。
+
+`npm run server:native` 是默认完整模式的别名。需要明确停用原生功能时可以使用降级模式：
 
 ```sh
 npm run server:lite
 ```
 
-降级模式直接运行 Dart VM，支持同步功能及不依赖 QuickJS 的平台接口，**不支持斗鱼播放、抖音推荐列表及分类下直播列表**。本机已安装 Build Tools，完成 QuickJS 构建并启动完整模式服务；不代表所有平台真实直播验收通过。平台接口仍受网络、反爬策略和核心库实现影响。
+降级模式直接运行 Dart VM，支持同步功能及不依赖 QuickJS 的平台接口，**不支持斗鱼播放、抖音推荐列表及分类下直播列表**。完整模式启动时先初始化 QuickJS，加载失败则停止服务，不会静默降级。健康检查不代表所有平台真实直播验收通过，平台接口仍受网络、反爬策略和核心库实现影响。
 
 ## 播放页
 
@@ -84,6 +88,8 @@ lib/server/
   library/             本机数据文件、校验与并发写入保护
 bin/server.dart        Dart 启动入口
 scripts/serve.mjs      SDK 定位与进程启动
+scripts/windows-native.mjs  Windows 免 C++ 编译启动
+native/windows-x64/   随项目分发的 QuickJS DLL、版本清单和许可证
 ```
 
 ## 数据同步

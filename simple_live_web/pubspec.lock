@@ -50,7 +50,7 @@ packages:
     source: hosted
     version: "3.0.8"
   dart_quickjs:
-    dependency: transitive
+    dependency: "direct main"
     description:
       path: "."
       ref: HEAD
