@@ -26,7 +26,8 @@ export function ThemePicker() {
           <span className="theme-menu-label">主题色</span>
           <ColorPicker
             value={primaryColor}
-            onChange={(_, hex) => setPrimaryColor(hex)}
+            defaultFormat="hex"
+            onChange={(color) => setPrimaryColor(color.toHexString())}
             disabledAlpha
             showText
             presets={[

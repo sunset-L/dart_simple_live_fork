@@ -57,13 +57,7 @@ export function PlaybackPage({
     const playerFrame = frame.current;
     if (!container || !playerFrame) return;
     const resize = () => {
-      const width = Math.min(
-        container.clientWidth,
-        (container.clientHeight * 16) / 9,
-      );
-      playerFrame.style.width = `${width}px`;
-      playerFrame.style.height = `${(width * 9) / 16}px`;
-      playerFrame.classList.toggle("is-compact", width < 560);
+      playerFrame.classList.toggle("is-compact", container.clientWidth < 560);
     };
     const observer = new ResizeObserver(resize);
     observer.observe(container);
