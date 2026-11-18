@@ -13,6 +13,7 @@ import android.graphics.ColorFilter
 import android.graphics.Matrix
 import android.graphics.Outline
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.RadialGradient
 import android.graphics.Rect
@@ -435,9 +436,43 @@ class FloatingPlayerWindow(
         // 圆角裁切
         container.clipToOutline = true
         container.outlineProvider = object : ViewOutlineProvider() {
+            private val cornerPath = Path()
+            private var cachedWidth = -1
+            private var cachedHeight = -1
+            private var cachedRadius = -1f
+
             override fun getOutline(view: View, outline: Outline) {
-                val radius = min(cornerRadiusDp * density, min(view.width, view.height) / 2f)
-                outline.setRoundRect(0, 0, view.width, view.height, radius)
+                val pixelWidth = view.width
+                val pixelHeight = view.height
+                if (pixelWidth <= 0 || pixelHeight <= 0) {
+                    outline.setEmpty()
+                    return
+                }
+                val radius = min(cornerRadiusDp * density, min(pixelWidth, pixelHeight) / 2f)
+                // Android 13 起支持路径轮廓裁剪；旧系统仍用普通圆角。
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || radius == 0f) {
+                    outline.setRoundRect(0, 0, pixelWidth, pixelHeight, radius)
+                    return
+                }
+                if (cachedWidth != pixelWidth || cachedHeight != pixelHeight || cachedRadius != radius) {
+                    cachedWidth = pixelWidth
+                    cachedHeight = pixelHeight
+                    cachedRadius = radius
+                    val right = pixelWidth.toFloat()
+                    val bottom = pixelHeight.toFloat()
+                    // 与 Flutter ContinuousRectangleBorder 相同的连续曲线，边界取实际像素尺寸。
+                    cornerPath.rewind()
+                    cornerPath.moveTo(0f, radius)
+                    cornerPath.cubicTo(0f, 0f, 0f, 0f, radius, 0f)
+                    cornerPath.lineTo(right - radius, 0f)
+                    cornerPath.cubicTo(right, 0f, right, 0f, right, radius)
+                    cornerPath.lineTo(right, bottom - radius)
+                    cornerPath.cubicTo(right, bottom, right, bottom, right - radius, bottom)
+                    cornerPath.lineTo(radius, bottom)
+                    cornerPath.cubicTo(0f, bottom, 0f, bottom, 0f, bottom - radius)
+                    cornerPath.close()
+                }
+                outline.setPath(cornerPath)
             }
         }
 
