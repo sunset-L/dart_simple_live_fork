@@ -17,6 +17,7 @@ import android.graphics.PixelFormat
 import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.Shader
+import android.graphics.SurfaceTexture
 import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Handler
@@ -25,8 +26,8 @@ import android.util.Log
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
-import android.view.SurfaceHolder
-import android.view.SurfaceView
+import android.view.Surface
+import android.view.TextureView
 import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewConfiguration
@@ -90,6 +91,7 @@ class FloatingPlayerWindow(
 
         /** 贴边 / 横向占满时与屏幕边缘保留的间隙 */
         private const val EDGE_PADDING_DP = 6f
+        private const val CORNER_RADIUS_DP = 16f
 
         /**
          * 底部最小间隙。
@@ -226,7 +228,7 @@ class FloatingPlayerWindow(
         get() = context.resources.displayMetrics.density
 
     private var rootView: FrameLayout? = null
-    private var surfaceView: SurfaceView? = null
+    private var videoSurface: Surface? = null
     private var closeButton: ImageView? = null
     private var dockHandle: ImageView? = null
     private var dockedSide: DockSide? = null
@@ -371,52 +373,63 @@ class FloatingPlayerWindow(
 
         screenArea = currentScreenArea()
         val container = object : FrameLayout(context) {
+            override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+                super.onSizeChanged(w, h, oldw, oldh)
+                invalidateOutline()
+            }
+
             override fun onConfigurationChanged(newConfig: Configuration) {
                 super.onConfigurationChanged(newConfig)
                 mainHandler.removeCallbacks(screenChangeRunnable)
                 mainHandler.post(screenChangeRunnable)
             }
         }
-        container.setBackgroundColor(Color.TRANSPARENT)
+        container.setBackgroundColor(Color.BLACK)
 
-        // 视频输出
-        val sv = SurfaceView(context)
-        // 用不透明格式：视频内容本身不透明，TRANSLUCENT 会让画面偏灰
-        sv.holder.setFormat(PixelFormat.OPAQUE)
-        sv.setZOrderMediaOverlay(true)
-        val svLp = FrameLayout.LayoutParams(
+        // TextureView 参与窗口合成，圆角可同时裁剪视频、弹幕和控件。
+        val video = TextureView(context).apply { isOpaque = true }
+        val videoLp = FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         )
-        container.addView(sv, svLp)
+        container.addView(video, videoLp)
 
-        sv.holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: SurfaceHolder) {
-                Log.d(TAG, "floating surfaceCreated")
-                manager.attachFloatingSurface(holder.surface)
+        video.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+            private var outputSurface: Surface? = null
+
+            override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
+                releaseVideoSurface()
+                val surface = Surface(texture)
+                outputSurface = surface
+                videoSurface = surface
+                manager.attachFloatingSurface(surface)
             }
 
-            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-                manager.attachFloatingSurface(holder.surface)
+            override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {
+                // 缩放只改变视图尺寸，不重建或重绑解码输出。
             }
 
-            override fun surfaceDestroyed(holder: SurfaceHolder) {
-                Log.d(TAG, "floating surfaceDestroyed")
-                manager.detachFloatingSurface(holder.surface)
+            override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
+                releaseVideoSurface(outputSurface)
+                outputSurface = null
+                return true
             }
-        })
+
+            override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {}
+        }
 
         // 圆角裁切
         container.clipToOutline = true
         container.outlineProvider = object : ViewOutlineProvider() {
             override fun getOutline(view: View, outline: Outline) {
-                outline.setRoundRect(0, 0, view.width, view.height, 12f * density)
+                val radius = min(CORNER_RADIUS_DP * density, min(view.width, view.height) / 2f)
+                outline.setRoundRect(0, 0, view.width, view.height, radius)
             }
         }
 
         // 弹幕层：叠在视频画面之上、关闭按钮之下。
         //
-        // 【为什么加在这里】小窗是系统悬浮窗里的 SurfaceView，进小窗时
+        // 【为什么加在这里】小窗是系统悬浮窗，进小窗时
         // 直播页已经被 pop，Flutter 的弹幕层不复存在，所以弹幕只能在原生画。
         // 见 [DanmakuOverlayView] 的说明。
         //
@@ -519,6 +532,7 @@ class FloatingPlayerWindow(
             baseHeightPx,
             windowType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
@@ -841,7 +855,6 @@ class FloatingPlayerWindow(
         return try {
             windowManager.addView(container, lp)
             rootView = container
-            surfaceView = sv
             params = lp
             isShowing = true
             updateDockHandle()
@@ -856,7 +869,7 @@ class FloatingPlayerWindow(
             true
         } catch (e: Exception) {
             Log.e(TAG, "addView failed: $e")
-            surfaceView = null
+            releaseVideoSurface()
             rootView = null
             closeButton = null
             dockHandle = null
@@ -1486,7 +1499,7 @@ class FloatingPlayerWindow(
      * 被拖出边缘后松手：关闭小窗并销毁播放实例。
      *
      * 执行顺序很重要：
-     * 1. 先 hide() 把窗口和蒙版拆掉——播放器还要往 SurfaceView 上送帧，
+     * 1. 先 hide() 把窗口和蒙版拆掉——播放器还要往小窗输出 Surface 上送帧，
      *    窗口先走可以让 detachFloatingSurface 正常生效；
      * 2. 再 onFloatingClosed() 让播放器与 Dart 侧一起收尾。
      * 反过来会让已移除的表面还挂着输出，出现一帧灰屏。
@@ -1911,6 +1924,14 @@ class FloatingPlayerWindow(
         closeButton?.visibility = View.GONE
     }
 
+    private fun releaseVideoSurface(surface: Surface? = videoSurface) {
+        if (surface == null || videoSurface !== surface) return
+        videoSurface = null
+        // 先切回页内输出，再释放窗口拥有的 Surface；纹理由 TextureView 释放。
+        manager.detachFloatingSurface(surface)
+        surface.release()
+    }
+
     fun hide(rememberPos: Boolean = true) {
         mainHandler.removeCallbacks(screenChangeRunnable)
         mainHandler.removeCallbacks(hideCloseRunnable)
@@ -1934,13 +1955,12 @@ class FloatingPlayerWindow(
         removeEdgeHint()
         val view = rootView ?: return
         try {
-            surfaceView?.let { manager.detachFloatingSurface(it.holder.surface) }
+            releaseVideoSurface()
             windowManager.removeView(view)
         } catch (e: Exception) {
             Log.w(TAG, "removeView failed: $e")
         }
         rootView = null
-        surfaceView = null
         closeButton = null
         dockHandle = null
         dockedSide = null

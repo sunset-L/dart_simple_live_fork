@@ -43,7 +43,7 @@ import io.flutter.view.TextureRegistry
  *
  * 架构要点：
  * 1. 全应用只有一个 ExoPlayer 实例，直播页与悬浮窗共用同一条网络流与解码器。
- * 2. 页内画面走 Flutter 外部纹理（SurfaceTexture），悬浮窗走自己窗口里的 SurfaceView。
+ * 2. 页内画面走 Flutter 外部纹理（SurfaceTexture），悬浮窗走自己窗口里的 TextureView。
  * 3. 输出目标由 [applySurface] 按「悬浮窗 > 页内纹理」的优先级自动决定，
  *    所以「页面 → 小窗」「小窗 → 页面」只是换输出，不重新取流、不重建播放器。
  *
@@ -755,7 +755,7 @@ class NativePlayerManager private constructor() {
 
             // ------------------------------------------------------ 小窗弹幕
             //
-            // 小窗是系统悬浮窗里的 SurfaceView，进小窗时 Flutter 渲染树已经销毁，
+            // 小窗是系统悬浮窗，进小窗时 Flutter 渲染树已经销毁，
             // 弹幕只能由原生绘制。这三个方法负责把「是否显示」「样式」「内容」
             // 从小窗播放期间仍存活的 Dart 侧（FloatingSession）送进来。
             "setFloatingDanmakuEnabled" -> {
