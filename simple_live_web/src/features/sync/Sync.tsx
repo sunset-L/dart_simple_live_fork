@@ -23,7 +23,7 @@ import {
 
 interface Props {
   data: Library;
-  commit: (data: Library, expected: Library) => void;
+  commit: (data: Library, expected: Library) => Promise<void>;
   notify: (message: string) => void;
 }
 interface Remote {
@@ -109,7 +109,7 @@ export function Sync({ data, commit, notify }: Props) {
     if (action === "download") {
       if (remote.missing || !remote.data)
         throw new Error("云端还没有 backup.zip 备份");
-      commit(
+      await commit(
         restore(data, readArchive(fromBase64(remote.data)), selection, replace),
         data,
       );
@@ -398,7 +398,7 @@ export function Sync({ data, commit, notify }: Props) {
                   if (selected.size > 20 * 1024 * 1024)
                     throw new Error("备份不能超过 20 MB");
                   if (!confirmRestore()) return;
-                  commit(
+                  await commit(
                     restore(
                       data,
                       readArchive(new Uint8Array(await selected.arrayBuffer())),

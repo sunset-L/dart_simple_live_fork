@@ -25,6 +25,8 @@ import { useDanmaku } from "../../features/danmaku/useDanmaku";
 import { createFilter } from "../../features/danmaku/filter";
 import { usePlayerSettings } from "../../stores/playerSettings";
 import { useLibrary } from "../../stores/useLibrary";
+import { useFollowStatus } from "../../features/follow/useFollowStatus";
+import { FollowStatusLabel } from "../../features/follow/FollowStatusLabel";
 import "../../styles/player.css";
 
 export function PlaybackPage({
@@ -42,6 +44,7 @@ export function PlaybackPage({
     [fit, setFit] = useState("contain");
   const [panel, setPanel] = useState("chat"),
     [keyword, setKeyword] = useState("");
+  const followStatus = useFollowStatus(data.follows, panel === "follows");
   const [handle, setHandle] = useState<PlayerHandle | null>(null);
   const [status, setStatus] = useState("等待连接"),
     [toast, setToast] = useState("");
@@ -81,10 +84,10 @@ export function PlaybackPage({
       notify(message);
     });
   const toggleFollow = () =>
-    perform(() => {
+    perform(async () => {
       if (!session.detail) return;
       const room = session.detail;
-      update((current) => ({
+      await update((current) => ({
         ...current,
         follows: followed
           ? current.follows.filter((user) => user.id !== id)
@@ -116,25 +119,28 @@ export function PlaybackPage({
     )
       return;
     historyWritten.current = true;
-    try {
-      const room = session.detail;
-      update((current) => ({
-        ...current,
-        histories: [
-          ...current.histories.filter((item) => item.id !== id),
-          {
-            id,
-            roomId,
-            siteId: site,
-            userName: room.userName,
-            face: room.userAvatar,
-            updateTime: new Date().toISOString(),
-          },
-        ],
-      }));
-    } catch (error) {
-      notify(error instanceof Error ? error.message : "历史记录保存失败");
-    }
+    const room = session.detail;
+    void (async () => {
+      try {
+        await update((current) => ({
+          ...current,
+          histories: [
+            ...current.histories.filter((item) => item.id !== id),
+            {
+              id,
+              roomId,
+              siteId: site,
+              userName: room.userName,
+              face: room.userAvatar,
+              updateTime: new Date().toISOString(),
+            },
+          ],
+        }));
+      } catch (error) {
+        historyWritten.current = false;
+        notify(error instanceof Error ? error.message : "历史记录保存失败");
+      }
+    })();
   }, [status, session.detail, id, roomId, site, update, notify]);
   const failed = useCallback(
     (message: string) => {
@@ -150,10 +156,10 @@ export function PlaybackPage({
     chat.reconnect();
   };
   const addKeyword = () =>
-    perform(() => {
+    perform(async () => {
       const word = keyword.trim();
       if (!word) return;
-      update((current) => ({
+      await update((current) => ({
         ...current,
         blocked: [...new Set([...current.blocked, word])],
       }));
@@ -348,7 +354,7 @@ export function PlaybackPage({
                   }}
                 >
                   {user.userName}
-                  <span>{user.siteId}</span>
+                  <FollowStatusLabel value={followStatus.statuses[user.id]} />
                 </a>
               ))}
             </div>

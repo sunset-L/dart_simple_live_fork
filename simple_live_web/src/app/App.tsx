@@ -9,6 +9,7 @@ import {
   Heart,
   Monitor,
   Moon,
+  RefreshCw,
   Search,
   Sun,
   Trash2,
@@ -31,7 +32,6 @@ const PlaybackPage = lazy(() =>
 );
 import {
   download,
-  emptyLibrary,
   loadLibrary,
   rawLibrary,
   resetLibrary,
@@ -41,6 +41,7 @@ import {
   type Library,
   type Room,
 } from "../services/libraryData";
+import { refreshLibrary, watchLibrary } from "../stores/libraryStorage";
 
 type Page =
   "home" | "follow" | "category" | "mine" | "sync" | "history" | "blocked";
@@ -63,16 +64,17 @@ const validPage = (): Page => {
   const value = location.hash.slice(1);
   return Object.hasOwn(pageNames, value) ? (value as Page) : "home";
 };
-const initial = loadLibrary();
-
 export function App() {
   const [page, setPage] = useState<Page>(validPage);
   const playbackMatch = location.pathname.match(
     /^\/playback\/(bilibili|douyu|huya|douyin)\/([A-Za-z0-9_-]{1,100})$/,
   );
   const [site, setSite] = useState("bilibili");
-  const [data, setData] = useState(initial.data);
-  const [storageError, setStorageError] = useState(initial.error);
+  const [data, setData] = useState(() => loadLibrary().data);
+  const [storageError, setStorageError] = useState(() => loadLibrary().error);
+  const [storageCorrupt, setStorageCorrupt] = useState(
+    () => loadLibrary().corrupt,
+  );
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState("");
   const [toast, setToast] = useState("");
@@ -116,17 +118,16 @@ export function App() {
     return () => media.removeEventListener("change", apply);
   }, [theme]);
   useEffect(() => {
-    const onStorage = (event: StorageEvent) => {
-      if (event.key !== "simple-live-web.library.v1" && event.key !== null)
-        return;
+    const onStorage = () => {
       const loaded = loadLibrary();
       library.current = loaded.data;
       setData(loaded.data);
       setStorageError(loaded.error);
+      setStorageCorrupt(loaded.corrupt);
     };
-    window.addEventListener("storage", onStorage);
+    const stop = watchLibrary(onStorage);
     return () => {
-      window.removeEventListener("storage", onStorage);
+      stop();
       clearTimeout(timer.current);
     };
   }, []);
@@ -136,7 +137,7 @@ export function App() {
     clearTimeout(timer.current);
     timer.current = setTimeout(() => setToast(""), 5500);
   }
-  function commit(next: Library, expected?: Library) {
+  async function commit(next: Library, expected?: Library) {
     if (storageError) throw new Error(storageError);
     const current = loadLibrary();
     if (current.error) throw new Error(current.error);
@@ -148,13 +149,11 @@ export function App() {
       setData(current.data);
       throw new Error("本地数据已在其他页面更新，请重新执行操作");
     }
-    saveLibrary(next);
-    library.current = next;
-    setData(next);
+    await saveLibrary(next);
   }
-  function change(action: () => void) {
+  async function change(action: () => void | Promise<void>) {
     try {
-      action();
+      await action();
     } catch (error) {
       notify(error instanceof Error ? error.message : "操作失败");
     }
@@ -163,11 +162,11 @@ export function App() {
     location.hash = next;
   }
   function toggleFollow(room: Room | Follow | History) {
-    change(() => {
+    void change(async () => {
       const id = `${room.siteId}_${room.roomId}`;
       const current = library.current;
       const exists = current.follows.some((user) => user.id === id);
-      commit({
+      await commit({
         ...current,
         follows: exists
           ? current.follows.filter((user) => user.id !== id)
@@ -194,7 +193,7 @@ export function App() {
     });
   }
   function saveTag(name: string) {
-    change(() => {
+    void change(async () => {
       if (!editing) return;
       const current = library.current;
       if (!current.follows.some((item) => item.id === editing.id))
@@ -213,7 +212,7 @@ export function App() {
             userId: [editing.id],
           });
       }
-      commit({
+      await commit({
         ...current,
         tags,
         follows: current.follows.map((item) =>
@@ -370,31 +369,40 @@ export function App() {
           <div className="alert error">
             <span>{storageError}</span>
             <button
-              title="导出原始数据"
-              onClick={() =>
-                change(() => download(rawLibrary(), "SimpleLive-recovery.json"))
-              }
+              title="重新读取本地数据"
+              aria-label="重新读取本地数据"
+              onClick={() => void refreshLibrary()}
             >
-              <Download size={17} />
+              <RefreshCw size={17} />
             </button>
-            <button
-              title="清除损坏数据"
-              onClick={() =>
-                change(() => {
-                  if (
-                    !confirm("请确认已导出原始数据。清除后不可撤销，是否继续？")
-                  )
-                    return;
-                  resetLibrary();
-                  const next = emptyLibrary();
-                  library.current = next;
-                  setData(next);
-                  setStorageError("");
-                })
-              }
-            >
-              <Trash2 size={17} />
-            </button>
+            {storageCorrupt && (
+              <>
+                <button
+                  title="导出原始数据"
+                  onClick={() =>
+                    change(() =>
+                      download(rawLibrary(), "SimpleLive-recovery.json"),
+                    )
+                  }
+                >
+                  <Download size={17} />
+                </button>
+                <button
+                  title="清除损坏数据"
+                  onClick={() =>
+                    change(async () => {
+                      if (
+                        !confirm("请确认已导出原始数据。清除后不可撤销，是否继续？")
+                      )
+                        return;
+                      await resetLibrary();
+                    })
+                  }
+                >
+                  <Trash2 size={17} />
+                </button>
+              </>
+            )}
           </div>
         )}
         {isCatalog && (
@@ -421,9 +429,9 @@ export function App() {
             onAdd={() => setAddFollow(true)}
             onHistory={() => go("history")}
             onRemoveTag={(name) =>
-              change(() => {
+              change(async () => {
                 const current = library.current;
-                commit({
+                await commit({
                   ...current,
                   follows: current.follows.map((user) =>
                     user.tag === name ? { ...user, tag: "全部" } : user,
@@ -454,9 +462,9 @@ export function App() {
               )
             }
             onClear={() =>
-              change(() => {
+              change(async () => {
                 if (confirm("清空全部历史记录？"))
-                  commit({ ...library.current, histories: [] });
+                  await commit({ ...library.current, histories: [] });
               })
             }
           />
@@ -488,10 +496,10 @@ export function App() {
         <AddFollow
           onClose={() => setAddFollow(false)}
           onSave={(user) =>
-            change(() => {
+            change(async () => {
               if (library.current.follows.some((item) => item.id === user.id))
                 throw new Error("此主播已经在关注列表中");
-              commit({
+              await commit({
                 ...library.current,
                 follows: [...library.current.follows, user],
               });

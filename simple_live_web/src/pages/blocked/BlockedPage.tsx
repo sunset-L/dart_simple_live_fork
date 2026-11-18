@@ -8,13 +8,13 @@ export function Blocked({
   notify,
 }: {
   data: Library;
-  commit: (data: Library) => void;
+  commit: (data: Library) => Promise<void>;
   notify: (message: string) => void;
 }) {
   const [value, setValue] = useState("");
-  function update(words: string[]) {
+  async function update(words: string[]) {
     try {
-      commit({ ...data, blocked: words });
+      await commit({ ...data, blocked: words });
       setValue("");
     } catch (error) {
       notify(error instanceof Error ? error.message : "保存失败");

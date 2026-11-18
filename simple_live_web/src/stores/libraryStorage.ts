@@ -1,4 +1,5 @@
 import type { Library } from "../types/library";
+import { get, post } from "../services/apiClient";
 export const emptyLibrary = (): Library => ({
   follows: [],
   histories: [],
@@ -7,6 +8,24 @@ export const emptyLibrary = (): Library => ({
 });
 
 const storageKey = "simple-live-web.library.v1";
+const migrationKey = `${storageKey}.migrated`;
+const changeKey = `${storageKey}.changed`;
+const listeners = new Set<() => void>();
+let cached = { data: emptyLibrary(), error: "", corrupt: false };
+let revision = "";
+let raw = "{}";
+let ready = false;
+let writing = false;
+let legacyCorrupt = false;
+let initializing: Promise<void> | undefined;
+let refreshing: Promise<void> | undefined;
+
+interface StoredLibrary {
+  revision: string;
+  data: unknown;
+  error?: string;
+  raw?: string;
+}
 
 export function record(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value))
@@ -90,34 +109,218 @@ export function validate(value: unknown): Library {
   };
 }
 
-export function loadLibrary(): { data: Library; error: string } {
+export function loadLibrary(): { data: Library; error: string; corrupt: boolean } {
+  return cached;
+}
+
+function publish() {
+  listeners.forEach((listener) => listener());
+}
+
+function accept(value: StoredLibrary) {
+  if (typeof value.revision !== "string")
+    throw new Error("本地服务返回了无效数据");
+  const data = value.data === null ? emptyLibrary() : validate(value.data);
+  revision = value.revision;
+  raw = value.raw ?? JSON.stringify(data);
+  cached = { data, error: value.error ?? "", corrupt: Boolean(value.error) };
+  publish();
+}
+
+function changed() {
   try {
-    const raw = localStorage.getItem(storageKey);
-    return {
-      data: raw ? validate(JSON.parse(raw)) : emptyLibrary(),
-      error: "",
-    };
+    localStorage.setItem(changeKey, revision);
   } catch {
-    return {
-      data: emptyLibrary(),
-      error:
-        "本地数据无法读取，已停止写入。请先导出原始数据备份，再清除损坏的数据。",
-    };
+    // Disk persistence does not depend on browser storage being available.
   }
 }
 
-export function saveLibrary(data: Library) {
+function mergeLegacy(server: Library, legacy: Library): Library {
+  const follows = unique([...legacy.follows, ...server.follows]);
+  const histories = new Map(server.histories.map((item) => [item.id, item]));
+  for (const item of legacy.histories) {
+    const current = histories.get(item.id);
+    if (!current || Date.parse(item.updateTime) > Date.parse(current.updateTime))
+      histories.set(item.id, item);
+  }
+  const tags = [...server.tags];
+  const existingFollows = new Set(server.follows.map((item) => item.id));
+  for (const item of legacy.tags) {
+    const index = tags.findIndex(
+      (current) => current.id === item.id || current.tag === item.tag,
+    );
+    const userId = item.userId.filter((id) => !existingFollows.has(id));
+    if (index === -1) tags.push({ ...item, userId });
+    else
+      tags[index] = {
+        ...tags[index],
+        userId: [...new Set([...tags[index].userId, ...userId])],
+      };
+  }
+  return validate({
+    follows,
+    histories: [...histories.values()],
+    tags,
+    blocked: [...new Set([...server.blocked, ...legacy.blocked])],
+  });
+}
+
+export function initializeLibrary(): Promise<void> {
+  if (ready) return Promise.resolve();
+  if (initializing) return initializing;
+  initializing = (async () => {
+    try {
+      accept(await get<StoredLibrary>("library"));
+      if (cached.error) {
+        ready = true;
+        return;
+      }
+      let legacy: string | null = null;
+      try {
+        if (localStorage.getItem(migrationKey) !== "1")
+          legacy = localStorage.getItem(storageKey);
+      } catch {
+        /* Browser storage is optional for the new disk-backed library. */
+      }
+      if (legacy) {
+        let data: Library;
+        try {
+          data = validate(JSON.parse(legacy));
+        } catch {
+          legacyCorrupt = true;
+          raw = legacy;
+          throw new Error("旧浏览器数据损坏，请先导出原始数据，再清除损坏数据。");
+        }
+        // Another tab can migrate at the same time; merge against its new revision.
+        for (let attempt = 0; ; attempt++) {
+          try {
+            accept(
+              await post<StoredLibrary>("library", {
+                revision,
+                data: mergeLegacy(cached.data, data),
+              }),
+            );
+            break;
+          } catch (error) {
+            if (attempt >= 2) throw error;
+            accept(await get<StoredLibrary>("library"));
+            if (cached.error) throw new Error(cached.error);
+          }
+        }
+        changed();
+      }
+      try {
+        localStorage.setItem(migrationKey, "1");
+      } catch {
+        /* Repeating the merge is idempotent if storage is unavailable. */
+      }
+      ready = true;
+    } catch (error) {
+      ready = legacyCorrupt;
+      cached = {
+        ...cached,
+        corrupt: legacyCorrupt || cached.corrupt,
+        error: error instanceof Error ? error.message : "本地数据读取失败",
+      };
+    } finally {
+      initializing = undefined;
+      publish();
+    }
+  })();
+  return initializing;
+}
+
+export function refreshLibrary(): Promise<void> {
+  if (!ready) return initializeLibrary();
+  if (writing || legacyCorrupt) return Promise.resolve();
+  if (refreshing) return refreshing;
+  refreshing = (async () => {
+    const startedRevision = revision;
+    try {
+      const value = await get<StoredLibrary>("library");
+      if (
+        !writing &&
+        revision === startedRevision &&
+        (value.revision !== revision || cached.error)
+      )
+        accept(value);
+    } catch (error) {
+      if (!writing && revision === startedRevision) {
+        cached = {
+          ...cached,
+          error: error instanceof Error ? error.message : "本地数据读取失败",
+        };
+        publish();
+      }
+    } finally {
+      refreshing = undefined;
+    }
+  })();
+  return refreshing;
+}
+
+export async function saveLibrary(data: Library) {
+  if (!ready) throw new Error("正在读取本地数据，请稍候");
+  if (cached.error) throw new Error(cached.error);
+  if (writing) throw new Error("正在保存，请稍候再操作");
+  const next = validate(data);
+  writing = true;
   try {
-    localStorage.setItem(storageKey, JSON.stringify(validate(data)));
-  } catch {
-    throw new Error("保存失败，浏览器存储空间不足或不可用；原有数据未更改");
+    accept(await post<StoredLibrary>("library", { revision, data: next }));
+    changed();
+  } catch (error) {
+    // A conflict reloads the latest data without overwriting another tab's edits.
+    try {
+      accept(await get<StoredLibrary>("library"));
+    } catch {
+      /* Keep the last readable copy if the server is unavailable. */
+    }
+    throw error;
+  } finally {
+    writing = false;
   }
 }
 
 export function rawLibrary(): string {
-  return localStorage.getItem(storageKey) ?? "{}";
+  return raw;
 }
 
-export function resetLibrary() {
-  localStorage.removeItem(storageKey);
+export async function resetLibrary() {
+  if (!cached.corrupt) throw new Error("数据没有损坏，请先重新读取本地数据");
+  if (writing) throw new Error("正在保存，请稍候再操作");
+  writing = true;
+  try {
+    if (legacyCorrupt) {
+      localStorage.removeItem(storageKey);
+      localStorage.setItem(migrationKey, "1");
+      legacyCorrupt = false;
+      accept(await get<StoredLibrary>("library"));
+    } else {
+      accept(await post<StoredLibrary>("library", { revision, reset: true }));
+    }
+    changed();
+  } finally {
+    writing = false;
+  }
+}
+
+export function watchLibrary(listener: () => void): () => void {
+  listeners.add(listener);
+  const reload = () => {
+    if (document.visibilityState !== "hidden") void refreshLibrary();
+  };
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === changeKey) reload();
+  };
+  const timer = setInterval(reload, 5000);
+  window.addEventListener("focus", reload);
+  document.addEventListener("visibilitychange", reload);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    listeners.delete(listener);
+    clearInterval(timer);
+    window.removeEventListener("focus", reload);
+    document.removeEventListener("visibilitychange", reload);
+    window.removeEventListener("storage", onStorage);
+  };
 }

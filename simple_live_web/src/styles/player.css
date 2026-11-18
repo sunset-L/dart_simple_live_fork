@@ -448,9 +448,19 @@
   text-decoration: none;
   padding: 12px;
   border-bottom: 1px solid #333;
+  gap: 12px;
 }
 .follow-link span {
   color: #9ba8ba;
+}
+.follow-link .follow-status {
+  flex-shrink: 0;
+}
+.follow-link .follow-status.is-live {
+  color: #5cd3a2;
+}
+.follow-link .follow-status.is-error {
+  color: #ff8a90;
 }
 .sc-message {
   border-left: 3px solid #4c99d7;

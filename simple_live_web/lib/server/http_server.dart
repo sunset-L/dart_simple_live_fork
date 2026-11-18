@@ -5,8 +5,10 @@ import 'dart:io';
 import 'package:simple_live_core/simple_live_core.dart';
 
 import 'danmaku/danmaku_service.dart';
+import 'library/library_service.dart';
 import 'playback/playback_service.dart';
 import 'routes/catalog_routes.dart';
+import 'routes/live_status_routes.dart';
 import 'routes/playback_routes.dart';
 import 'routes/static_routes.dart';
 import 'sync/sync_service.dart';
@@ -21,6 +23,8 @@ final sites = <String, LiveSite>{
 final playback = PlaybackService(sites);
 final playbackRoutes = PlaybackRoutes(playback);
 final danmaku = DanmakuService(playback);
+final library = LibraryService();
+final liveStatuses = LiveStatusRoutes(sites);
 
 Future<void> main() async {
   CoreLog.enableLog = false;
@@ -81,6 +85,10 @@ Future<void> handle(HttpRequest request) async {
           'status': true,
           'native': !const bool.fromEnvironment('SIMPLE_LIVE_NO_NATIVE'),
         };
+      } else if (request.uri.path == '/api/library') {
+        result = await library.read();
+      } else if (request.uri.path == '/api/live-status') {
+        result = await liveStatuses.read(request.uri);
       } else if (request.uri.path.startsWith('/api/playback/')) {
         result = await playbackRoutes
             .read(request.uri)
@@ -101,6 +109,7 @@ Future<void> handle(HttpRequest request) async {
       }
       final body = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
       result = switch (request.uri.path) {
+        '/api/library' => await library.write(body),
         '/api/webdav' => await webdav(body),
         '/api/device' => await device(body),
         _ => throw const FormatException('接口不存在'),
@@ -112,10 +121,16 @@ Future<void> handle(HttpRequest request) async {
     response.write(jsonEncode(result));
   } catch (error) {
     if (upgraded) return;
-    response.statusCode = error is FormatException ? 400 : 502;
+    response.statusCode = error is LibraryConflict
+        ? 409
+        : error is FormatException
+        ? 400
+        : 502;
     response.headers.contentType = ContentType.json;
     // Never echo upstream URLs, credentials, or private response bodies.
     final message = switch (error) {
+      LibraryConflict _ => '数据已在其他页面更新，请重新执行操作',
+      FileSystemException _ => '本地数据文件读写失败，请检查数据目录权限和磁盘空间',
       FormatException e => e.message,
       HttpException e => e.message,
       TimeoutException _ => '请求超时，请重试',

@@ -590,7 +590,7 @@ nav button.active {
 }
 .follow-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(310px, 100%), 1fr));
   gap: 10px;
 }
 .follow-card {
@@ -601,6 +601,7 @@ nav button.active {
   border: 1px solid var(--line);
   border-radius: 7px;
   padding: 12px;
+  min-width: 0;
 }
 .follow-card > img {
   width: 43px;
@@ -608,6 +609,7 @@ nav button.active {
   border-radius: 50%;
   object-fit: cover;
   background: var(--surface-soft);
+  flex: 0 0 43px;
 }
 .follow-info {
   min-width: 0;
@@ -651,10 +653,29 @@ nav button.active {
   background: transparent;
   padding: 7px;
   border-radius: 5px;
+  flex: 0 0 30px;
 }
 .follow-card > button:hover {
   color: var(--primary);
   background: var(--primary-soft);
+}
+.follow-status,
+.follow-info .follow-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 16px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.follow-status.is-live,
+.follow-info .follow-status.is-live {
+  color: #13855c;
+}
+.follow-status.is-error,
+.follow-info .follow-status.is-error {
+  color: var(--danger);
 }
 .tag-manage {
   display: flex;

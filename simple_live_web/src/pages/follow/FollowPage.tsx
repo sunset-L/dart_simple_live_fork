@@ -1,6 +1,7 @@
 import {
   History as HistoryIcon,
   Plus,
+  RefreshCw,
   Settings,
   Trash2,
   X,
@@ -12,6 +13,8 @@ import {
   type Follow,
 } from "../../services/libraryData";
 import { openPlayback } from "../../app/routes";
+import { useFollowStatus } from "../../features/follow/useFollowStatus";
+import { FollowStatusLabel } from "../../features/follow/FollowStatusLabel";
 
 export function FollowPage({
   data,
@@ -39,14 +42,28 @@ export function FollowPage({
   onHistory: () => void;
 }) {
   const tags = [...new Set(["全部", ...data.tags.map((item) => item.tag)])];
+  const { statuses, loading, refresh } = useFollowStatus(following);
+  const liveCount = following.filter(
+    (item) => statuses[item.id]?.status === true,
+  ).length;
   return (
     <div className="follow-content">
       <div className="content-heading">
         <div>
           <h1>我的关注</h1>
-          <span className="muted">{following.length} 位主播</span>
+          <span className="muted">
+            {following.length} 位主播 · {liveCount} 位直播中
+          </span>
         </div>
         <div className="actions compact">
+          <button
+            title="刷新开播状态"
+            aria-label="刷新开播状态"
+            disabled={loading || !following.length}
+            onClick={refresh}
+          >
+            <RefreshCw size={18} className={loading ? "spin" : ""} />
+          </button>
           <button title="历史记录" aria-label="历史记录" onClick={onHistory}>
             <HistoryIcon size={18} />
           </button>
@@ -103,6 +120,7 @@ export function FollowPage({
                   · {item.tag}
                 </span>
                 <small>房间 {item.roomId}</small>
+                <FollowStatusLabel value={statuses[item.id]} />
               </div>
               <button
                 title="设置标签"
