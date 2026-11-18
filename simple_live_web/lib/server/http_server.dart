@@ -12,6 +12,7 @@ import 'routes/catalog_routes.dart';
 import 'routes/live_status_routes.dart';
 import 'routes/playback_routes.dart';
 import 'routes/static_routes.dart';
+import 'settings/preferences_service.dart';
 import 'sync/sync_service.dart';
 
 const maxBody = 28 * 1024 * 1024;
@@ -25,6 +26,7 @@ final playback = PlaybackService(sites);
 final playbackRoutes = PlaybackRoutes(playback);
 final danmaku = DanmakuService(playback);
 final library = LibraryService();
+final preferences = PreferencesService();
 final liveStatuses = LiveStatusRoutes(sites);
 
 Future<void> main() async {
@@ -98,6 +100,8 @@ Future<void> handle(HttpRequest request) async {
         };
       } else if (request.uri.path == '/api/library') {
         result = await library.read();
+      } else if (request.uri.path == '/api/preferences') {
+        result = await preferences.read();
       } else if (request.uri.path == '/api/live-status') {
         result = await liveStatuses.read(request.uri);
       } else if (request.uri.path.startsWith('/api/playback/')) {
@@ -121,6 +125,7 @@ Future<void> handle(HttpRequest request) async {
       final body = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
       result = switch (request.uri.path) {
         '/api/library' => await library.write(body),
+        '/api/preferences' => await preferences.write(body),
         '/api/webdav' => await webdav(body),
         '/api/device' => await device(body),
         _ => throw const FormatException('接口不存在'),

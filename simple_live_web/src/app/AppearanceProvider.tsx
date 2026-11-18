@@ -7,29 +7,12 @@ import {
 } from "react";
 import { App as AntApp, ConfigProvider, theme as antTheme } from "antd";
 import zhCN from "antd/locale/zh_CN";
-
-export const themeColors = [
-  { id: "blue", name: "蓝色", color: "#1677ff" },
-  { id: "green", name: "绿色", color: "#52c41a" },
-  { id: "teal", name: "青色", color: "#13c2c2" },
-  { id: "rose", name: "玫红", color: "#eb2f96" },
-  { id: "amber", name: "金色", color: "#faad14" },
-  { id: "violet", name: "紫色", color: "#722ed1" },
-] as const;
-
-function read(key: string, fallback: string) {
-  try {
-    return localStorage.getItem(key) ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-function normalizeColor(value: string) {
-  return (
-    themeColors.find((item) => item.id === value)?.color ??
-    (/^#[0-9a-f]{6}$/i.test(value) ? value : "#1677ff")
-  );
-}
+import {
+  normalizeColor,
+  updatePreferences,
+  usePreferences,
+} from "../stores/preferencesStorage";
+export { themeColors } from "../stores/preferencesStorage";
 const AppearanceContext = createContext({
   mode: "system",
   setMode: (_mode: string) => {},
@@ -62,13 +45,8 @@ function TokenBridge({ dark }: { dark: boolean }) {
 }
 
 export function AppearanceProvider({ children }: { children: ReactNode }) {
-  const [mode, setModeState] = useState(() => {
-    const saved = read("simple-live-web.theme", "system");
-    return ["system", "light", "dark"].includes(saved) ? saved : "system";
-  });
-  const [primaryColor, setColor] = useState(() =>
-    normalizeColor(read("simple-live-web.theme-color", "blue")),
-  );
+  const { data } = usePreferences();
+  const { mode, primaryColor } = data;
   const [systemDark, setSystemDark] = useState(
     () => matchMedia("(prefers-color-scheme: dark)").matches,
   );
@@ -81,36 +59,17 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
     media.addEventListener("change", changed);
     return () => media.removeEventListener("change", changed);
   }, []);
-  useEffect(() => {
-    try {
-      localStorage.setItem("simple-live-web.theme", mode);
-      localStorage.setItem("simple-live-web.theme-color", primaryColor);
-    } catch {
-      // Appearance remains usable when browser storage is unavailable.
-    }
-  }, [mode, primaryColor]);
-  useEffect(() => {
-    const changed = (event: StorageEvent) => {
-      if (event.key === "simple-live-web.theme-color")
-        setColor(normalizeColor(event.newValue ?? "blue"));
-      if (
-        event.key === "simple-live-web.theme" &&
-        ["system", "light", "dark"].includes(event.newValue ?? "")
-      )
-        setModeState(event.newValue!);
-    };
-    window.addEventListener("storage", changed);
-    return () => window.removeEventListener("storage", changed);
-  }, []);
   return (
     <AppearanceContext.Provider
       value={{
         mode,
         setMode: (value) => {
-          if (["system", "light", "dark"].includes(value)) setModeState(value);
+          if (["system", "light", "dark"].includes(value))
+            updatePreferences({ mode: value });
         },
         primaryColor,
-        setPrimaryColor: (value) => setColor(normalizeColor(value)),
+        setPrimaryColor: (value) =>
+          updatePreferences({ primaryColor: normalizeColor(value) }),
       }}
     >
       <ConfigProvider

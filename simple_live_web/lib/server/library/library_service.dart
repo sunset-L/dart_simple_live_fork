@@ -3,26 +3,14 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import '../storage/data_directory.dart';
+
 class LibraryConflict implements Exception {}
 
 class LibraryService {
-  final Directory directory = Directory(_dataPath());
+  final Directory directory = localDataDirectory();
   Future<void> _queue = Future.value();
   final _random = Random.secure();
-
-  static String _dataPath() {
-    final env = Platform.environment;
-    final override = env['SIMPLE_LIVE_DATA_DIR'];
-    if (override != null && override.isNotEmpty) return override;
-    final base = Platform.isWindows
-        ? env['APPDATA']
-        : env['XDG_DATA_HOME'] ??
-              (env['HOME'] == null ? null : '${env['HOME']}/.local/share');
-    if (base == null || base.isEmpty) {
-      throw const FileSystemException('无法定位本地数据目录');
-    }
-    return '$base${Platform.pathSeparator}simple-live-web';
-  }
 
   File get _file => File('${directory.path}/library.json');
 

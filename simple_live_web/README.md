@@ -14,13 +14,19 @@ dart pub get
 npm run server
 ```
 
-另开终端执行 `npm run dev`，打开 Vite 输出的地址（默认 `http://127.0.0.1:5173`）。`/api` 和 `/ws` 转发到本机 Dart 服务，默认端口为 23236。只在明确需要打包或部署时执行 `npm run build`；Dart 服务也可提供已构建的 `dist` 静态页面。
+另开终端执行 `npm run dev`，打开 Vite 输出的地址（默认 `http://127.0.0.1:5173`）。`/api` 和 `/ws` 转发到本机 Dart 服务，默认端口为 23236。开发时无需执行 `npm run build`，前端修改由 Vite 热更新。Dart 服务默认只提供 API，不会因为目录里残留 `dist` 就提供旧网页。
 
 `scripts/serve.mjs` 优先使用 `DART_EXECUTABLE` 指定的 Dart 可执行文件，其次使用仓库 `.task-cache/fvm/versions/3.47.1` 内的 SDK，最后查找 PATH 中的 `dart`。`PORT` 可修改监听端口。服务仅绑定本机 IPv4，不应直接部署到公网或解除来源校验。
 
 若更改 API 端口，为两个终端设置相同的 `PORT` 环境变量。前端开发端口可用 `npm run dev -- --port 23237` 指定；升级旧版时可先复用原网页端口，以便自动迁移该地址下的旧浏览器数据。
 
 关注、标签、历史和屏蔽词保存在本机 Dart 服务的固定数据目录，不随前端或 API 端口改变；`localhost`、`127.0.0.1`、开发模式和正式模式也共用这一份数据。Windows 默认目录为 `%APPDATA%/simple-live-web/library.json`；其他系统使用 `$XDG_DATA_HOME/simple-live-web` 或 `$HOME/.local/share/simple-live-web`。可通过 `SIMPLE_LIVE_DATA_DIR` 指定目录，同一份数据的各个服务必须使用相同目录。
+
+主题模式、主题色、侧栏收起状态和弹幕设置保存在同目录的 `preferences.json`，同样跨端口共用。旧浏览器设置在原地址首次打开新版时迁移，只填补尚未保存的字段，不覆盖已有本机设置；新地址不会把默认值写入并覆盖旧设置。可见页面每 5 秒以及重新聚焦时同步更新，保存失败会提示。
+
+开发模式通常有两个服务：Vite 提供最新源码页面，Dart 提供 API。当前开发入口为 `http://127.0.0.1:23236`，API 后端为 23238，23237 不使用。不要把 API 后端端口当作网页入口；前端端口改变仍共用本机数据。
+
+只在用户明确要求正式构建或部署时运行 `npm run build`。如需由 Dart 提供正式静态页面，须显式设置 `SIMPLE_LIVE_SERVE_STATIC=1`，开发时不启用。
 
 ## 核心库与原生依赖
 

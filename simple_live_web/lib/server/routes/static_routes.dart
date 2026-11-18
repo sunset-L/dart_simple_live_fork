@@ -1,6 +1,12 @@
 import 'dart:io';
 
 Future<void> serveStatic(HttpRequest request) async {
+  if (Platform.environment['SIMPLE_LIVE_SERVE_STATIC'] != '1') {
+    request.response.statusCode = 404;
+    request.response.headers.contentType = ContentType.text;
+    request.response.write('这是 API 服务，请使用前端开发地址。');
+    return;
+  }
   if (request.method != 'GET') throw const FormatException('不支持的请求方法');
   final segments = request.uri.pathSegments;
   if (segments.any(

@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
 import { AppearanceProvider } from "./app/AppearanceProvider";
 import { initializeLibrary } from "./stores/libraryStorage";
+import { initializePreferences } from "./stores/preferencesStorage";
 import "./styles/app.css";
 
 const root = createRoot(document.getElementById("root")!);
@@ -16,11 +17,14 @@ const app = (
 if (location.pathname.startsWith("/playback/")) {
   root.render(app);
   void initializeLibrary();
+  void initializePreferences();
 } else {
   root.render(
     <div className="loading" role="status">
       正在读取本地数据
     </div>,
   );
-  void initializeLibrary().then(() => root.render(app));
+  void Promise.all([initializeLibrary(), initializePreferences()]).then(() =>
+    root.render(app),
+  );
 }

@@ -34,6 +34,7 @@ import {
   type Room,
 } from "../services/libraryData";
 import { refreshLibrary, watchLibrary } from "../stores/libraryStorage";
+import { usePreferences } from "../stores/preferencesStorage";
 
 type Page =
   "home" | "follow" | "category" | "mine" | "sync" | "history" | "blocked";
@@ -53,6 +54,7 @@ const validPage = (): Page => {
 export function App() {
   const { mode: theme, setMode: setTheme } = useAppearance();
   const { message, modal } = AntApp.useApp();
+  const { error: preferencesError } = usePreferences();
   const [page, setPage] = useState<Page>(validPage);
   const [historyParent, setHistoryParent] = useState<"follow" | "mine">(
     "follow",
@@ -74,6 +76,11 @@ export function App() {
   const [filter, setFilter] = useState("all");
   const library = useRef(data);
   library.current = data;
+
+  useEffect(() => {
+    if (preferencesError)
+      void message.error({ key: "preferences-error", content: preferencesError });
+  }, [preferencesError, message]);
 
   useEffect(() => {
     const onHash = () => {

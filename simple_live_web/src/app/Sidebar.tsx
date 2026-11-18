@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -9,6 +8,7 @@ import {
   User,
 } from "lucide-react";
 import type { Page } from "./routes";
+import { updatePreferences, usePreferences } from "../stores/preferencesStorage";
 
 const navigation = [
   { id: "home", label: "首页", icon: Compass },
@@ -24,21 +24,10 @@ export function Sidebar({
   activePage: Page;
   onNavigate: (page: Page) => void;
 }) {
-  const [collapsed, setCollapsed] = useState(() => {
-    try {
-      return localStorage.getItem("simple-live-web.sidebar-collapsed") === "1";
-    } catch {
-      return false;
-    }
-  });
+  const { data } = usePreferences();
+  const collapsed = data.sidebarCollapsed;
   function toggle() {
-    const next = !collapsed;
-    setCollapsed(next);
-    try {
-      localStorage.setItem("simple-live-web.sidebar-collapsed", next ? "1" : "0");
-    } catch {
-      /* Navigation remains usable without browser storage. */
-    }
+    updatePreferences({ sidebarCollapsed: !collapsed });
   }
   return (
     <aside className={`sidebar ${collapsed ? "is-collapsed" : ""}`}>
