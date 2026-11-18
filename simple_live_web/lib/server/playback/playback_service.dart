@@ -13,11 +13,12 @@ class PlaybackService {
   final _random = Random.secure();
 
   LiveSite site(String id) {
-    if (!{'bilibili', 'douyu', 'huya'}.contains(id)) {
+    if (!{'bilibili', 'douyu', 'huya', 'douyin'}.contains(id)) {
       throw const FormatException('本版暂不支持该平台播放');
     }
-    if (id == 'douyu' && const bool.fromEnvironment('SIMPLE_LIVE_NO_NATIVE')) {
-      throw const HttpException('斗鱼取流需要 QuickJS，请使用完整模式并配置 C++ 编译环境');
+    if ({'douyu', 'douyin'}.contains(id) &&
+        const bool.fromEnvironment('SIMPLE_LIVE_NO_NATIVE')) {
+      throw const HttpException('斗鱼和抖音播放需要 QuickJS，请使用 npm run server 启动完整模式');
     }
     return sites[id]!;
   }
