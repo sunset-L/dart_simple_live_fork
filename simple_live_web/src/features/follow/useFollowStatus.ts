@@ -35,12 +35,7 @@ export function useFollowStatus(
     let animationTimer: ReturnType<typeof setTimeout> | undefined;
     let running = false;
     async function refresh() {
-      if (
-        running ||
-        controller.signal.aborted ||
-        document.visibilityState === "hidden"
-      )
-        return;
+      if (running || controller.signal.aborted) return;
       running = true;
       const started = performance.now();
       setLoading(items.length > 0);
