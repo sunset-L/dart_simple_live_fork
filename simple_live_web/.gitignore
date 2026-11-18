@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .dart_tool/
+.runtime/
 *.log
 *.tsbuildinfo
 .env*

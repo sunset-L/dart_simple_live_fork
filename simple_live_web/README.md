@@ -1,20 +1,115 @@
 # Simple Live Web
 
-网页客户端，参考 Windows 客户端的左侧导航、平台标签、直播网格和设置列表。包含首页、关注、分类、我的，以及数据同步、历史记录、屏蔽词管理和独立标签页播放器。后端继续使用 Dart，共享客户端平台解析与弹幕协议。
+网页客户端，参考 Windows 客户端的左侧导航、平台标签、直播网格和设置列表。包含首页、关注、分类、我的、账号管理、数据同步、历史记录、屏蔽词管理和独立标签页播放器。后端继续使用 Dart，共享客户端平台解析与弹幕协议。
 
-## 运行
+## Windows 双击启动
 
-需要 Node.js 22.12+（本机使用 24）、完整 Dart SDK 3.10+ 和 Git（用于获取已有 Git 依赖）。本仓库的 Flutter 3.47.1 已包含所需 Dart SDK。Windows x64 网页开发不需要 Visual Studio 生成工具、Visual Studio Installer、Windows SDK、Windows SDK AddOn 或编辑器字体。
+使用 Windows 10/11 x64，从完整仓库中的 `simple_live_web` 目录双击 **`start.bat`**：
 
-默认使用本地开发模式，在本目录执行（已安装依赖时无需重复获取）：
+- 自动检查 Node.js、完整 Dart SDK、Git、项目锁文件及随项目提供的 QuickJS DLL。必须同时保留相邻的 `simple_live_core` 和其中的 `packages/tars_dart`，不能只复制网页目录。
+- 首次缺少工具或需要初始化/更新项目依赖时，先显示安装清单、用途、下载来源、存放位置和手动替代方案。**按 Enter 才开始准备，输入其他内容则取消**；不会自动接受安装。
+- 优先复用已有工具。缺少时下载下表中的 Windows x64 便携版到 `.runtime`，校验固定 SHA-256 后解压，不写系统 PATH、注册表或全局安装目录；下载显示进度，解压和依赖安装显示阶段及命令输出。
+- npm 依赖使用 `npm ci --progress=true --no-audit --no-fund`；Dart 使用 `dart pub get --enforce-lockfile`，保留已提交的版本和 Git 提交号，不执行升级或原生 C++ 构建。首次通过启动器准备一次后，后续根据工具版本、锁文件和缓存是否有效决定是否重新准备，不是每次都获取依赖。
+- 前后端均准备就绪后，窗口打印**实际网页访问地址**、API 地址和本机数据目录。默认网页端口 23236、API 23238；占用时向后选择空闲端口，网页与 API 不共用端口，也不会停止其他会话的服务。以窗口输出为准，不把 API 地址当作网页入口。
+- 所有进程都属于本次窗口的 Windows Job Object。**关闭窗口或按 Ctrl+C 会关闭本次前端、Dart 后端及子进程**；准备过程中关闭窗口，也不会留下安装命令继续运行。任一服务异常退出时，启动器退出并清理本次服务，保留错误提示等待按键。
+- 无目录写权限、工具被系统策略拦截、下载失败或解压失败时，窗口提示手动处理后重新打开 `start.bat`；不自动提权，也不要求安装庞大的构建工具链。
+- 始终以 Vite 开发模式启动，不执行网页 `build` 或 Android 打包。前端热更新，修改 Dart 后端后关闭窗口再双击启动。
+
+脚本内固定的自动下载版本及来源如下；已有兼容工具不强制替换成这些版本：
+
+| 工具 | 自动下载版本 | 用途与来源 |
+| --- | --- | --- |
+| Node.js，含 npm | 24.22.3 x64 | Vite/React 开发服务和 npm 依赖；`nodejs.org/dist` 官方 ZIP |
+| 完整 Dart SDK | 3.13.1 x64 | 本地 API、同步和平台解析；`storage.googleapis.com/dart-archive` 官方 ZIP |
+| MinGit | 2.56.1 x64 | 仅用于获取 Dart 的 Git 依赖；`github.com/git-for-windows/git` 官方发布 ZIP |
+| QuickJS DLL | 随仓库提供 | 斗鱼/抖音签名，位于 `native/windows-x64`，不另行下载安装 |
+
+**没有额外浏览器插件需要安装**。Node、Dart、Git 是开发工具，不是浏览器插件。也不安装 Flutter、Visual Studio 生成工具、Visual Studio Installer、Windows SDK、Windows SDK AddOn、编辑器字体或额外 VC++ 运行库。Windows PowerShell 5.1 和 .NET 使用系统自带版本；进程清理由 `kernel32.dll` 完成。
+
+### 手动准备
+
+若公司策略禁止脚本、没有目录权限或希望自行管理工具，可手动安装：
+
+- [Node.js 官方下载](https://nodejs.org/en/download)：64 位 Node.js 22.12+，推荐 24 LTS，并保留自带 npm。安装器中的额外编译工具/Chocolatey 选项不需要勾选。
+- [Dart SDK 官方归档](https://dart.dev/get-dart/archive)：完整 SDK 3.13+，推荐 3.13.1。锁文件要求 3.13+，只安装 Dart 3.10 无法满足当前依赖。已有 Flutter 3.47.1 包含可用 SDK，但开发网页不需要专门安装 Flutter。
+- [Git for Windows](https://git-scm.com/download/win)：常规安装版或 MinGit 均可，用于 `pub get` 获取已锁定的 Git 依赖。
+
+常规安装后重新打开窗口，让 PATH 生效；独立 Dart 可以用 `DART_EXECUTABLE` 指定。也可以从启动脚本显示的官方 URL 用浏览器下载并解压为以下结构，保留 ZIP 内的许可证及运行文件：
+
+```text
+simple_live_web/
+  start.bat
+  .runtime/                         本机缓存，不提交 Git
+    node/node.exe                   Node ZIP 内层目录的内容
+    node/node_modules/npm/
+    dart-sdk/bin/dart.exe            Dart ZIP 内的 dart-sdk
+    git/cmd/git.exe                 MinGit ZIP 的内容
+    pub-cache/                      默认 Dart 包缓存
+    downloads/                      已校验的下载包
+    dependencies.json               启动器依赖准备记录
+```
+
+只把完整仓库放在个人可写目录即可，不需要管理员权限。不要关闭系统安全策略；策略不允许 PowerShell 时请使用下方的手动双终端启动方式。安装失败可重新运行：已成功准备的工具会复用，下载不完整或校验失败的文件不会执行。旧便携工具被替换时保留为 `.runtime/previous-*`，不会删除系统中的工具。
+
+### 配置
+
+启动器继承启动窗口的环境变量，不需要把配置写进 BAT。默认不创建包含密码的配置文件，WebDAV 地址及密码在页面内配置并保存到本机设置。
+
+| 环境变量 | 默认/作用 |
+| --- | --- |
+| `SIMPLE_LIVE_WEB_PORT` | 双击启动的网页优先端口，默认 23236；占用时自动找空闲端口 |
+| `PORT` | API 优先端口，双击启动默认 23238；手动 `npm run server` 默认 23236 |
+| `DART_EXECUTABLE` | 完整 SDK 的 `dart.exe` 路径；其次查找项目便携版、仓库已有 FVM SDK、PATH |
+| `SIMPLE_LIVE_DATA_DIR` | 可选的本机数据目录；不设置时 Windows 使用 `%APPDATA%\simple-live-web` |
+| `PUB_CACHE` | 启动器未指定时使用 `.runtime/pub-cache`；显式指定时沿用指定目录 |
+| `PUB_HOSTED_URL`、npm 自有配置 | 保留已有包源/网络配置，不自动修改；使用可信源 |
+| `SIMPLE_LIVE_SERVE_STATIC` | 双击启动固定为 `0`，不提供可能过期的 `dist` 网页 |
+
+例如在命令提示符中临时指定端口和数据目录：
+
+```bat
+set "SIMPLE_LIVE_WEB_PORT=23336"
+set "PORT=23338"
+set "DART_EXECUTABLE=D:\tools\dart-sdk\bin\dart.exe"
+set "SIMPLE_LIVE_DATA_DIR=D:\SimpleLiveData"
+call start.bat
+```
+
+只读检查环境、不安装或启动服务：
+
+```bat
+start.bat -CheckOnly
+```
+
+本次启动器运行只修改本机缓存和生成文件，不把账号、Cookie 或 WebDAV 密码写入启动脚本。`.runtime`、`.dart_tool`、`node_modules`、`dist` 和日志不提交；个人数据保存在配置的数据目录，不随端口或工具缓存改变。
+
+## 手动双终端运行
+
+需要 Node.js 22.12+（推荐 24 LTS）、完整 Dart SDK **3.13+** 和 Git。Windows x64 网页开发不需要 Visual Studio 或 Windows SDK。以下命令适用于已自行安装工具的环境；依赖未变且已经准备好时无需重复获取：
 
 ```sh
 npm ci
-dart pub get
+dart pub get --enforce-lockfile
+```
+
+在 Windows 的第一个命令提示符中启动 API：
+
+```bat
+set "PORT=23238"
+set "SIMPLE_LIVE_SERVE_STATIC=0"
 npm run server
 ```
 
-另开终端执行 `npm run dev`，打开 Vite 输出的地址（默认 `http://127.0.0.1:5173`）。`/api` 和 `/ws` 转发到本机 Dart 服务，默认端口为 23236。开发时无需执行 `npm run build`，前端修改由 Vite 热更新。Dart 服务默认只提供 API，不会因为目录里残留 `dist` 就提供旧网页。
+在第二个命令提示符中启动网页，`PORT` 必须与 API 一致：
+
+```bat
+set "PORT=23238"
+npm run dev -- --port 23236 --strictPort
+```
+
+打开 `http://127.0.0.1:23236`；`/api` 和 `/ws` 转发到本机 Dart 服务。PowerShell 中设置环境变量使用 `$env:PORT='23238'`，其他系统按对应 shell 设置即可。Vite 不指定前端端口时默认 5173，手动服务不指定 `PORT` 时 API 默认 23236。手动模式由各终端独立负责进程，不等同于 BAT 的整组清理；Windows 推荐用 `start.bat`。
+
+开发时无需执行 `npm run build`，前端修改由 Vite 热更新。Dart 服务默认只提供 API，不会因为目录里残留 `dist` 就提供旧网页。
 
 `scripts/serve.mjs` 优先使用 `DART_EXECUTABLE` 指定的 Dart 可执行文件，其次使用仓库 `.task-cache/fvm/versions/3.47.1` 内的 SDK，最后查找 PATH 中的 `dart`。`PORT` 可修改监听端口。服务仅绑定本机 IPv4，不应直接部署到公网或解除来源校验。
 
@@ -24,7 +119,7 @@ npm run server
 
 主题模式、主题色、侧栏收起状态和弹幕设置保存在同目录的 `preferences.json`，同样跨端口共用。旧浏览器设置在原地址首次打开新版时迁移，只填补尚未保存的字段，不覆盖已有本机设置；新地址不会把默认值写入并覆盖旧设置。关注与设置只在页面打开或手动刷新时读取，不轮询、不订阅服务端变更，保存失败会提示。
 
-开发模式通常有两个服务：Vite 提供最新源码页面，Dart 提供 API。当前开发入口为 `http://127.0.0.1:23236`，API 后端为 23238，23237 不使用。不要把 API 后端端口当作网页入口；前端端口改变仍共用本机数据。
+开发模式有两个服务：Vite 提供最新源码页面，Dart 提供 API。通常网页为 `http://127.0.0.1:23236`、API 为 23238；启动器遇到端口占用时可能选择其他端口，以启动窗口输出为准。不要把 API 后端端口当作网页入口；前端端口改变仍共用本机数据。
 
 只在用户明确要求正式构建或部署时运行 `npm run build`。如需由 Dart 提供正式静态页面，须显式设置 `SIMPLE_LIVE_SERVE_STATIC=1`，开发时不启用。
 
@@ -32,7 +127,7 @@ npm run server
 
 直播列表、搜索和分类使用相对路径依赖 `../simple_live_core`，不复制平台解析逻辑。React + TypeScript + Ant Design 负责浏览器界面，本地 Dart 服务处理跨域接口请求。
 
-Windows x64 默认加载随项目提交的 `native/windows-x64/dart_quickjs.dll`。这个约 1.2 MB 的运行库只依赖 Windows 自带的 `KERNEL32.dll`，无需 Visual Studio、Windows SDK 或额外 VC++ 运行库。启动器校验文件完整性和依赖源码版本，用 Dart SDK 自带的 kernel 编译器生成后端程序，显式登记 DLL，再直接运行；不触发 C++ 编译，也不会自动下载或安装系统工具。修改后端代码后重启即可，清空启动缓存也会重新生成，DLL 不在缓存目录中。
+Windows x64 默认加载随项目提交的 `native/windows-x64/dart_quickjs.dll`。这个约 1.2 MB 的运行库只依赖 Windows 自带的 `KERNEL32.dll`，无需 Visual Studio、Windows SDK 或额外 VC++ 运行库。`scripts/serve.mjs` 校验文件完整性和依赖源码版本，用 Dart SDK 自带的 kernel 编译器生成后端程序，显式登记 DLL，再直接运行；不触发 C++ 编译，不负责安装系统工具。`start.bat` 仅在确认后补齐缺少的便携工具和项目依赖。修改后端代码后重启即可，清空启动缓存也会重新生成，DLL 不在缓存目录中。
 
 换到另一台 Windows x64 电脑时，保留此目录、许可证及依赖锁文件，准备已有的 Node.js、完整 Dart SDK 和 Git，执行上述依赖获取与启动命令即可。`DART_EXECUTABLE` 可指向独立 Dart SDK 的 `dart.exe`，无需另外安装 Flutter 来开发网页。具体来源、版本与更新规则见 `native/windows-x64/README.md`。更新 QuickJS 依赖时必须同步提供配套 DLL，版本不匹配会明确报错；需要安装新工具时先征求用户同意。
 
@@ -102,6 +197,8 @@ lib/server/
 bin/server.dart        Dart 启动入口
 scripts/serve.mjs      SDK 定位与进程启动
 scripts/windows-native.mjs  Windows 免 C++ 编译启动
+start.bat             Windows 双击开发入口
+scripts/start-windows.ps1  环境准备、端口选择及进程组管理
 native/windows-x64/   随项目分发的 QuickJS DLL、版本清单和许可证
 ```
 
