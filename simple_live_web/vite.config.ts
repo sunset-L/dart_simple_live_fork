@@ -5,6 +5,10 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    watch: {
+      usePolling: process.platform === "win32",
+      interval: 300,
+    },
     proxy: {
       "/api": { target: `http://127.0.0.1:${process.env.PORT || "23236"}` },
       "/ws": {
