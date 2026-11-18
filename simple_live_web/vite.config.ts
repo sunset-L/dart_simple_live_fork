@@ -5,6 +5,12 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    proxy: { "/api": { target: "http://127.0.0.1:23236" } },
+    proxy: {
+      "/api": { target: `http://127.0.0.1:${process.env.PORT || "23236"}` },
+      "/ws": {
+        target: `ws://127.0.0.1:${process.env.PORT || "23236"}`,
+        ws: true,
+      },
+    },
   },
 });

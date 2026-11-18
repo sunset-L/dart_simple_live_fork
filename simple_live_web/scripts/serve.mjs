@@ -18,14 +18,17 @@ if (!existsSync(resolve(root, ".dart_tool/package_config.json"))) {
   );
   process.exit(1);
 }
-// Direct VM startup keeps sync usable without a native C toolchain.
+const lite = process.argv.includes("--lite");
+// Full mode builds QuickJS for Douyu signing; lite mode is explicitly opt-in.
 const child = spawn(
   dart,
-  [
-    "--packages=.dart_tool/package_config.json",
-    "-DSIMPLE_LIVE_NO_NATIVE=true",
-    "bin/server.dart",
-  ],
+  lite
+    ? [
+        "--packages=.dart_tool/package_config.json",
+        "-DSIMPLE_LIVE_NO_NATIVE=true",
+        "bin/server.dart",
+      ]
+    : ["run", "bin/server.dart"],
   { cwd: root, stdio: "inherit", windowsHide: true },
 );
 child.on("error", (error) => {

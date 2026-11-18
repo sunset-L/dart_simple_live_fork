@@ -1,0 +1,29 @@
+:root {
+  font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+  color: #252a34;
+  background: #f7f8fa;
+  font-synthesis: none;
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --surface-soft: #f2f4f7;
+  --line: #e6e9ee;
+  --text: #252a34;
+  --muted: #7b8491;
+  --primary: #3284d9;
+  --primary-soft: #eaf3fc;
+  --danger: #cf4f5b;
+  --shadow: 0 8px 25px rgba(37, 42, 52, 0.06);
+}
+:root[data-theme="dark"] {
+  --bg: #181b21;
+  --surface: #22262e;
+  --surface-soft: #2b3039;
+  --line: #373d47;
+  --text: #edf0f4;
+  --muted: #a1aab8;
+  --primary: #68aaf1;
+  --primary-soft: #263b52;
+  --danger: #f07883;
+  --shadow: 0 8px 25px rgba(0, 0, 0, 0.2);
+  color: var(--text);
+}

@@ -19,7 +19,7 @@ import {
   toBase64,
   type Library,
   type Selection,
-} from "./data";
+} from "../../services/libraryData";
 
 interface Props {
   data: Library;

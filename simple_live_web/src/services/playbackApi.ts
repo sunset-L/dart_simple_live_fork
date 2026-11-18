@@ -1,0 +1,33 @@
+import { get } from "./apiClient";
+import type {
+  DanmakuEvent,
+  Quality,
+  RoomDetail,
+  Source,
+} from "../types/playback";
+export const playbackApi = {
+  detail: (site: string, roomId: string, signal?: AbortSignal) =>
+    get<RoomDetail>(
+      `playback/room?site=${encodeURIComponent(site)}&roomId=${encodeURIComponent(roomId)}`,
+      signal,
+    ),
+  qualities: (site: string, roomId: string, signal?: AbortSignal) =>
+    get<{ items: Quality[] }>(
+      `playback/qualities?site=${encodeURIComponent(site)}&roomId=${encodeURIComponent(roomId)}`,
+      signal,
+    ),
+  sources: (
+    site: string,
+    roomId: string,
+    quality: Quality,
+    signal?: AbortSignal,
+  ) =>
+    get<{ quality: string; items: Source[] }>(
+      `playback/source?${new URLSearchParams({ site, roomId, qualityName: quality.quality, sort: String(quality.sort) })}`,
+      signal,
+    ),
+  danmakuUrl: (site: string, roomId: string) =>
+    `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/danmaku?site=${encodeURIComponent(site)}&roomId=${encodeURIComponent(roomId)}`,
+  isEvent: (value: unknown): value is DanmakuEvent =>
+    typeof value === "object" && value !== null && "type" in value,
+};

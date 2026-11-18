@@ -1,0 +1,128 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:simple_live_core/simple_live_core.dart';
+
+import 'danmaku/danmaku_service.dart';
+import 'playback/playback_service.dart';
+import 'routes/catalog_routes.dart';
+import 'routes/playback_routes.dart';
+import 'routes/static_routes.dart';
+import 'sync/sync_service.dart';
+
+const maxBody = 28 * 1024 * 1024;
+final sites = <String, LiveSite>{
+  'bilibili': BiliBiliSite(),
+  'douyu': DouyuSite(),
+  'huya': HuyaSite(),
+  'douyin': DouyinSite(),
+};
+final playback = PlaybackService(sites);
+final playbackRoutes = PlaybackRoutes(playback);
+final danmaku = DanmakuService(playback);
+
+Future<void> main() async {
+  CoreLog.enableLog = false;
+  CoreLog.requestLogType = RequestLogType.none;
+  final port = int.parse(Platform.environment['PORT'] ?? '23236');
+  final server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
+  stdout.writeln('Simple Live Web: http://127.0.0.1:$port');
+  await for (final request in server) {
+    unawaited(handle(request));
+  }
+}
+
+Future<void> handle(HttpRequest request) async {
+  final response = request.response;
+  var upgraded = false;
+  response.headers.set('X-Content-Type-Options', 'nosniff');
+  response.headers.set('Referrer-Policy', 'no-referrer');
+  response.headers.set('Cache-Control', 'no-store');
+  try {
+    // Loopback binding alone does not prevent DNS rebinding or cross-site writes.
+    final host = request.headers.value('host')?.split(':').first;
+    if (host != '127.0.0.1' && host != 'localhost') {
+      throw const HttpException('不允许的访问来源');
+    }
+    final origin = request.headers.value('origin');
+    if (origin != null) {
+      final uri = Uri.tryParse(origin);
+      if (uri == null ||
+          !['127.0.0.1', 'localhost'].contains(uri.host) ||
+          uri.scheme != 'http') {
+        throw const HttpException('不允许跨站访问本地服务');
+      }
+    }
+    if (!request.uri.path.startsWith('/api/')) {
+      if (request.uri.path == '/ws/danmaku') {
+        final socket = await WebSocketTransformer.upgrade(request);
+        upgraded = true;
+        await danmaku.serve(socket, request.uri);
+        return;
+      }
+      await serveStatic(request);
+      return;
+    }
+    final proxyMatch = RegExp(
+      r'^/api/playback/proxy/([A-Za-z0-9_-]{20,64})$',
+    ).firstMatch(request.uri.path);
+    if (proxyMatch != null && request.method == 'GET') {
+      await playbackRoutes.proxy(request, proxyMatch.group(1)!);
+      return;
+    }
+    if (request.headers.value('x-simple-live') != 'web') {
+      throw const HttpException('缺少请求标识');
+    }
+    Object result;
+    if (request.method == 'GET') {
+      if (request.uri.path == '/api/health') {
+        result = {
+          'status': true,
+          'native': !const bool.fromEnvironment('SIMPLE_LIVE_NO_NATIVE'),
+        };
+      } else if (request.uri.path.startsWith('/api/playback/')) {
+        result = await playbackRoutes
+            .read(request.uri)
+            .timeout(const Duration(seconds: 90));
+      } else {
+        result = await readCatalogApi(
+          request.uri,
+          sites,
+        ).timeout(const Duration(seconds: 90));
+      }
+    } else if (request.method == 'POST') {
+      final bytes = <int>[];
+      await for (final chunk in request.timeout(const Duration(seconds: 30))) {
+        if (bytes.length + chunk.length > maxBody) {
+          throw const FormatException('请求数据过大');
+        }
+        bytes.addAll(chunk);
+      }
+      final body = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+      result = switch (request.uri.path) {
+        '/api/webdav' => await webdav(body),
+        '/api/device' => await device(body),
+        _ => throw const FormatException('接口不存在'),
+      };
+    } else {
+      throw const FormatException('不支持的请求方法');
+    }
+    response.headers.contentType = ContentType.json;
+    response.write(jsonEncode(result));
+  } catch (error) {
+    if (upgraded) return;
+    response.statusCode = error is FormatException ? 400 : 502;
+    response.headers.contentType = ContentType.json;
+    // Never echo upstream URLs, credentials, or private response bodies.
+    final message = switch (error) {
+      FormatException e => e.message,
+      HttpException e => e.message,
+      TimeoutException _ => '请求超时，请重试',
+      _ => '请求失败，请检查网络、连接配置或平台访问限制',
+    };
+    response.write(jsonEncode({'error': message}));
+  } finally {
+    if (!upgraded) await response.close();
+  }
+}

@@ -7,15 +7,15 @@ import {
   LoaderCircle,
   RefreshCw,
 } from "lucide-react";
+import { api } from "../../services/libraryData";
 import {
-  api,
   platforms,
   safeImage,
   type Category,
   type CategoryGroup,
   type Follow,
   type Room,
-} from "./data";
+} from "../../services/libraryData";
 
 export function Picture({
   src,
@@ -96,6 +96,7 @@ interface Props {
   onFollow: (room: Room) => void;
   search: string;
   categories?: boolean;
+  onOpenPlayback: (room: Room) => void;
 }
 
 export function Catalog({
@@ -105,6 +106,7 @@ export function Catalog({
   onFollow,
   search,
   categories = false,
+  onOpenPlayback,
 }: Props) {
   const [category, setCategory] = useState<Category | null>(null);
   const [refresh, setRefresh] = useState(0);
@@ -215,6 +217,7 @@ export function Catalog({
           endpoint={endpoint}
           follows={follows}
           onFollow={onFollow}
+          onOpenPlayback={onOpenPlayback}
         />
       )}
     </div>
@@ -232,10 +235,12 @@ function Rooms({
   endpoint,
   follows,
   onFollow,
+  onOpenPlayback,
 }: {
   endpoint: string;
   follows: Follow[];
   onFollow: (room: Room) => void;
+  onOpenPlayback: (room: Room) => void;
 }) {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [page, setPage] = useState(1);
@@ -285,13 +290,17 @@ function Rooms({
               className="room-card"
               key={`${room.siteId}_${room.roomId}`}
             >
-              <div className="room-cover">
+              <button
+                className="room-cover"
+                onClick={() => onOpenPlayback(room)}
+                aria-label={`打开 ${room.userName} 的直播间`}
+              >
                 <Picture src={room.cover} />
                 <span className="live-dot">直播中</span>
                 <span className="viewers">
                   {room.online.toLocaleString("zh-CN")} 人气
                 </span>
-              </div>
+              </button>
               <div className="room-body">
                 <div className="room-text">
                   <strong title={room.title}>

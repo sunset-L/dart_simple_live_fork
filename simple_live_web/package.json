@@ -8,11 +8,17 @@
     "build": "tsc -b && vite build",
     "check": "tsc -b",
     "server": "node scripts/serve.mjs",
-    "server:native": "dart run bin/server.dart"
+    "server:native": "node scripts/serve.mjs",
+    "server:lite": "node scripts/serve.mjs --lite"
   },
   "dependencies": {
+    "artplayer": "^5.4.0",
+    "artplayer-plugin-danmuku": "^5.3.0",
     "fflate": "^0.8.2",
+    "flv.js": "^1.6.2",
+    "hls.js": "^1.7.4",
     "lucide-react": "^0.468.0",
+    "re2js": "^2.10.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

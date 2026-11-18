@@ -1,0 +1,31 @@
+import 'dart:io';
+
+Future<void> serveStatic(HttpRequest request) async {
+  if (request.method != 'GET') throw const FormatException('不支持的请求方法');
+  final segments = request.uri.pathSegments;
+  if (segments.any(
+    (s) => s == '..' || s.contains('/') || s.contains('\\') || s.contains(':'),
+  )) {
+    throw const FormatException('无效文件路径');
+  }
+  final path = segments.where((s) => s.isNotEmpty).join('/');
+  final isPlayback = RegExp(
+    r'^playback/(bilibili|douyu|huya|douyin)/[A-Za-z0-9_-]{1,100}$',
+  ).hasMatch(path);
+  final file = File('dist/${path.isEmpty || isPlayback ? 'index.html' : path}');
+  if (!await file.exists()) {
+    request.response.statusCode = 404;
+    request.response.write('Not found. Run npm run build first.');
+    return;
+  }
+  final extension = file.path.split('.').last;
+  request.response.headers.contentType = ContentType.parse(switch (extension) {
+    'html' => 'text/html; charset=utf-8',
+    'js' => 'application/javascript; charset=utf-8',
+    'css' => 'text/css; charset=utf-8',
+    'png' => 'image/png',
+    'svg' => 'image/svg+xml',
+    _ => 'application/octet-stream',
+  });
+  await request.response.addStream(file.openRead());
+}
