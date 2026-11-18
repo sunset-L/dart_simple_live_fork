@@ -29,6 +29,7 @@ interface Preferences {
   mode: string;
   primaryColor: string;
   sidebarCollapsed: boolean;
+  playbackSidebarCollapsed: boolean;
   player: PlayerSettings;
   webdav: WebdavSettings;
 }
@@ -96,6 +97,7 @@ const defaults: Preferences = {
   mode: "system",
   primaryColor: "#1677ff",
   sidebarCollapsed: false,
+  playbackSidebarCollapsed: false,
   player: playerDefaults,
   webdav: { url: "", username: "", password: "" },
 };

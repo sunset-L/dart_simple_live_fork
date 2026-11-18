@@ -190,8 +190,7 @@ input:focus-visible:not([class*="ant-"]) {
   transform: translateY(-50%);
   transition:
     opacity 160ms ease,
-    color 160ms ease,
-    border-color 160ms ease;
+    color 160ms ease;
 }
 .sidebar:hover .sidebar-toggle,
 .sidebar-toggle:focus-visible {
@@ -199,8 +198,6 @@ input:focus-visible:not([class*="ant-"]) {
 }
 .sidebar-toggle:hover {
   color: var(--primary);
-  border-color: var(--primary);
-  background: var(--surface-soft);
 }
 .brand img {
   width: 36px;

@@ -16,6 +16,8 @@ import {
   Tooltip,
 } from "antd";
 import {
+  ChevronLeft,
+  ChevronRight,
   Copy,
   Flame,
   Heart,
@@ -44,6 +46,10 @@ import { platforms } from "../../app/platforms";
 import { formatHeat } from "../../components/formatHeat";
 import { playbackApi } from "../../services/playbackApi";
 import type { RoomDetail } from "../../types/playback";
+import {
+  updatePreferences,
+  usePreferences,
+} from "../../stores/preferencesStorage";
 
 export function PlaybackPage({
   site,
@@ -71,9 +77,14 @@ export function PlaybackPage({
   const chat = useDanmaku(site, roomId, session.detail?.status === true);
   const { data, update } = useLibrary();
   const [settings, setSettings] = usePlayerSettings();
+  const { data: preferences } = usePreferences();
+  const sidebarCollapsed = preferences.playbackSidebarCollapsed;
   const [panel, setPanel] = useState("chat"),
     [keyword, setKeyword] = useState("");
-  const followStatus = useFollowStatus(data.follows, panel === "follows");
+  const followStatus = useFollowStatus(
+    data.follows,
+    !sidebarCollapsed && panel === "follows",
+  );
   const [status, setStatus] = useState("等待连接");
   const retries = useRef(0),
     historyWritten = useRef(false);
@@ -266,7 +277,9 @@ export function PlaybackPage({
     });
   return (
     <div className="playback-page">
-      <main className="playback-main">
+      <main
+        className={`playback-main ${sidebarCollapsed ? "is-sidebar-collapsed" : ""}`}
+      >
         <section className="video-panel">
           <section className="room-info">
             <Tooltip title="返回关注页">
@@ -430,7 +443,11 @@ export function PlaybackPage({
             )}
           </div>
         </section>
-        <aside className="playback-sidebar">
+        <aside
+          id="playback-sidebar"
+          className="playback-sidebar"
+          hidden={sidebarCollapsed}
+        >
           <Tabs
             activeKey={panel}
             onChange={setPanel}
@@ -537,6 +554,24 @@ export function PlaybackPage({
             </div>
           )}
         </aside>
+        <div className="playback-sidebar-edge">
+          <button
+            className="sidebar-toggle playback-sidebar-toggle"
+            title={sidebarCollapsed ? "展开侧栏" : "收起侧栏"}
+            aria-label={sidebarCollapsed ? "展开侧栏" : "收起侧栏"}
+            aria-expanded={!sidebarCollapsed}
+            aria-controls="playback-sidebar"
+            onClick={() =>
+              updatePreferences({ playbackSidebarCollapsed: !sidebarCollapsed })
+            }
+          >
+            {sidebarCollapsed ? (
+              <ChevronLeft size={17} />
+            ) : (
+              <ChevronRight size={17} />
+            )}
+          </button>
+        </div>
       </main>
     </div>
   );

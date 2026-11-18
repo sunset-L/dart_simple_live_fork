@@ -86,6 +86,7 @@ Map<String, dynamic> _validate(Object? value) {
         entry.value is String &&
             RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(entry.value as String),
       'sidebarCollapsed' => entry.value is bool,
+      'playbackSidebarCollapsed' => entry.value is bool,
       'player' => entry.value is Map<String, dynamic>,
       'webdav' => entry.value is Map<String, dynamic>,
       _ => false,
