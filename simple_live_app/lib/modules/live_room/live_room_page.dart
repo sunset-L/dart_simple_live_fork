@@ -799,6 +799,8 @@ class LiveRoomPage extends GetView<LiveRoomController> {
           RefreshIndicator(
             onRefresh: FollowService.instance.loadData,
             child: ListView.builder(
+              // 标题栏和底部操作区已避让安全区，列表不再自动添加系统边距。
+              padding: EdgeInsets.zero,
               itemCount: FollowService.instance.liveList.length,
               itemBuilder: (_, i) {
                 var item = FollowService.instance.liveList[i];
