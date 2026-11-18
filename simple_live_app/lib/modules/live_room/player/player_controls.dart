@@ -24,6 +24,9 @@ Widget playerControls(LiveRoomController controller) {
       buildDanmuView(controller),
       Positioned.fill(
         child: Obx(() {
+          if (controller.fullScreenTransitioning.value) {
+            return const SizedBox.expand();
+          }
           if (controller.fullScreenState.value) {
             return buildFullControls(controller);
           }

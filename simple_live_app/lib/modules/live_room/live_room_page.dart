@@ -56,6 +56,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
         canPop: false,
         onPopInvokedWithResult: (didPop, r) async {
           if (didPop) return;
+          if (controller.fullScreenTransitioning.value) return;
           if (controller.fullScreenState.value) {
             controller.exitFull();
           } else {
@@ -63,11 +64,13 @@ class LiveRoomPage extends GetView<LiveRoomController> {
           }
         },
         child: Scaffold(
-          backgroundColor:
-              controller.fullScreenState.value ? Colors.black : null,
-          appBar: controller.fullScreenState.value ? null : appBar,
+          resizeToAvoidBottomInset: !controller.fullScreenState.value &&
+              !controller.fullScreenTransitioning.value,
           body: LiveRoomLayout(
             fullScreen: controller.fullScreenState.value,
+            landscapeFullScreen: controller.fullScreenLandscape,
+            appBar: appBar,
+            onInlineRestored: controller.completeInlineRestore,
             player: player,
             sidebar: sidebar,
             portraitActions: portraitActions,

@@ -434,16 +434,11 @@ class NativePlayerBridge {
 
   /// 播放器全屏方向控制
   ///
-  /// 【为什么不直接用 SystemChrome.setPreferredOrientations】
-  /// Flutter 引擎把方向列表翻译成一小组固定常量
-  /// （`PlatformChannel.decodeOrientations`，值域 -1/0/1/2/8/9/11/12/13），
-  /// **不含 SENSOR 系列**。传 landscapeLeft+landscapeRight 只能得到
-  /// USER_LANDSCAPE，受系统「旋转锁定」约束：关掉系统自动旋转后，
-  /// 全屏画面不会跟着手机翻转。B站/腾讯视频用的是 SENSOR_LANDSCAPE，
-  /// 所以它们可以。这里绕到原生直接下发 SENSOR 常量。
-  ///
-  /// - `landscape`：横屏内容全屏用（SENSOR_LANDSCAPE，左右由传感器决定）
+  /// 点击切屏指定确定方向，原生传感器仅在真实横向姿态稳定后翻向。
+  /// 不修改系统旋转动画，不在 Flutter 中重复旋转画面。
+  /// - `landscape`：横屏内容全屏，允许稳定的左右横屏姿态切换
   /// - `portrait`：竖屏内容全屏用（PORTRAIT，锁定竖屏）
+  /// - `restore`：固定到进入前的窗口方向，供播放器完成退出动画
   /// - `auto`：退出全屏时恢复进入前的方向策略
   /// 退出时先恢复原窗口方向，再恢复原方向策略，兼容系统应用小窗。
   Future<void> setScreenOrientation(String mode) async {
@@ -499,11 +494,7 @@ class NativePlayerBridge {
     }
   }
 
-  /// 清空页内纹理里残留的上一路流的画面，并复位首帧标记
-  ///
-  /// 纹理是全局单例复用的，里面始终留着上一路流的最后一帧。
-  /// 进入另一个直播间的播放页时，只把 `hasRenderedFirstFrame` 置 false
-  /// 并不够——纹理里那一帧照样会被合成出来，用户看到「加载中却显示上一个直播」。
+  /// 复位首帧标记，旧帧由页面加载层遮挡，保留纹理和解码缓冲区尺寸。
   Future<void> clearTexture() async {
     try {
       await _method.invokeMethod<bool>("clearTexture");

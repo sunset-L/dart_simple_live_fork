@@ -12,8 +12,10 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
+import android.view.OrientationEventListener
 import android.view.Surface
 import android.view.ViewTreeObserver
 import androidx.media3.common.C
@@ -116,6 +118,8 @@ class NativePlayerManager private constructor() {
 
     /** 是否已经出现过首帧（用于隐藏 loading 遮罩） */
     private var frameConsumed = false
+    @Volatile
+    private var frameProduced = false
 
     /** 悬浮窗画面输出 */
     private var floatingSurface: Surface? = null
@@ -133,8 +137,16 @@ class NativePlayerManager private constructor() {
     /** 方向策略和实际窗口方向分别保存；恢复策略本身不保证厂商小窗转回原方向。 */
     private var orientationBeforeFullscreen: Int? = null
     private var windowOrientationBeforeFullscreen: Int? = null
+    private var windowRotationBeforeFullscreen: Int? = null
     private var orientationRestoreListener: ViewTreeObserver.OnPreDrawListener? = null
     private var orientationRestoreTimeout: Runnable? = null
+    private var deviceOrientationListener: OrientationEventListener? = null
+    private var deviceOrientation: Int = OrientationEventListener.ORIENTATION_UNKNOWN
+    private var naturalLandscapeDisplay = false
+    private var landscapeFullscreen = false
+    private var pendingLandscapeOrientation: Int? = null
+    private var pendingLandscapeChange: Runnable? = null
+    private var orientationChangeAllowedAt = 0L
 
     /** 悬浮窗是否显示中 */
     var isFloating: Boolean = false
@@ -256,10 +268,16 @@ class NativePlayerManager private constructor() {
 
     fun attach(activity: Activity, engine: FlutterEngine) {
         if (this.activity !== activity) {
+            deviceOrientationListener?.disable()
+            deviceOrientationListener = null
+            stopLandscapeOrientationChanges()
             clearOrientationRestore()
         }
         this.activity = activity
         this.appContext = activity.applicationContext
+        if (deviceOrientationListener == null) {
+            initDeviceOrientationListener(activity)
+        }
 
         // 引擎是否换了。
         //
@@ -351,6 +369,9 @@ class NativePlayerManager private constructor() {
      * pendingFloatingTap，等新引擎的 Dart 侧订阅时补发。
      */
     fun detachActivity() {
+        deviceOrientationListener?.disable()
+        deviceOrientationListener = null
+        stopLandscapeOrientationChanges()
         clearOrientationRestore()
         activity = null
     }
@@ -382,9 +403,8 @@ class NativePlayerManager private constructor() {
      * 来电、锁屏、按 Home 键、按最近任务键都会走到这里，一律暂停。
      *
      * 【纹理不在这里清】
-     * [clearTexture] 会丢掉当前帧，回来时必须等下一帧才有画面。
-     * ExoPlayer 回前台后会继续往同一个 SurfaceTexture 渲染，
-     * 不清反而能立刻看到画面。清纹理只用在「换房间 / 重新进页面」。
+     * [clearTexture] 会复位首帧状态，回来时必须等下一帧才撤掉加载层。
+     * 后台暂停保留当前帧和首帧状态，回前台后可立刻显示已有画面。
      */
     fun onBackground() {
         if (!pauseOnHome) {
@@ -448,6 +468,7 @@ class NativePlayerManager private constructor() {
         orientationRestoreTimeout = null
         orientationBeforeFullscreen = null
         windowOrientationBeforeFullscreen = null
+        windowRotationBeforeFullscreen = null
     }
 
     private fun finishOrientationRestore(act: Activity) {
@@ -458,53 +479,135 @@ class NativePlayerManager private constructor() {
         }
     }
 
+    private fun stopLandscapeOrientationChanges() {
+        landscapeFullscreen = false
+        cancelPendingLandscapeChange()
+    }
+
+    private fun cancelPendingLandscapeChange() {
+        pendingLandscapeChange?.let { mainHandler.removeCallbacks(it) }
+        pendingLandscapeChange = null
+        pendingLandscapeOrientation = null
+    }
+
+    private fun initDeviceOrientationListener(act: Activity) {
+        val rotation = act.window.decorView.display?.rotation ?: Surface.ROTATION_0
+        val quarterTurn = rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_270
+        naturalLandscapeDisplay =
+            (windowOrientation(act) == Configuration.ORIENTATION_LANDSCAPE) != quarterTurn
+        deviceOrientation = OrientationEventListener.ORIENTATION_UNKNOWN
+        deviceOrientationListener = object : OrientationEventListener(act.applicationContext) {
+            override fun onOrientationChanged(orientation: Int) {
+                deviceOrientation = orientation
+                val target = landscapeOrientationForDevice(orientation)
+                if (!landscapeFullscreen || activity !== act || !act.hasWindowFocus() ||
+                    target == null || target == act.requestedOrientation
+                ) {
+                    cancelPendingLandscapeChange()
+                    return
+                }
+                if (target == pendingLandscapeOrientation) return
+                cancelPendingLandscapeChange()
+                pendingLandscapeOrientation = target
+                pendingLandscapeChange = Runnable {
+                    pendingLandscapeChange = null
+                    pendingLandscapeOrientation = null
+                    if (landscapeFullscreen && activity === act && act.hasWindowFocus() &&
+                        landscapeOrientationForDevice(deviceOrientation) == target
+                    ) {
+                        // 有效横向姿态持续 300ms 才翻向，竖着拿或平放时保持点击方向。
+                        orientationChangeAllowedAt = SystemClock.uptimeMillis() + 600L
+                        act.requestedOrientation = target
+                    }
+                }.also {
+                    val delay = maxOf(300L, orientationChangeAllowedAt - SystemClock.uptimeMillis())
+                    mainHandler.postDelayed(it, delay)
+                }
+            }
+        }.also { it.enable() }
+    }
+
+    private fun landscapeOrientationForDevice(degrees: Int): Int? {
+        if (degrees == OrientationEventListener.ORIENTATION_UNKNOWN) return null
+        val rotation = when (degrees) {
+            in 0..30, in 330..359 -> Surface.ROTATION_0
+            in 60..120 -> Surface.ROTATION_270
+            in 150..210 -> Surface.ROTATION_180
+            in 240..300 -> Surface.ROTATION_90
+            else -> return null
+        }
+        val normal = if (naturalLandscapeDisplay) Surface.ROTATION_0 else Surface.ROTATION_90
+        val reverse = if (naturalLandscapeDisplay) Surface.ROTATION_180 else Surface.ROTATION_270
+        return when (rotation) {
+            normal -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            reverse -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
+            else -> null
+        }
+    }
+
+    private fun orientationForWindow(orientation: Int, rotation: Int?): Int {
+        val landscape = orientation == Configuration.ORIENTATION_LANDSCAPE
+        val normal = if (landscape) ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        val reverse = if (landscape) ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
+            else ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
+        val reverseRotation = if (landscape) {
+            if (naturalLandscapeDisplay) Surface.ROTATION_180 else Surface.ROTATION_270
+        } else {
+            if (naturalLandscapeDisplay) Surface.ROTATION_270 else Surface.ROTATION_180
+        }
+        return if (rotation == reverseRotation) reverse else normal
+    }
+
     /**
-     * 设置屏幕方向，绕开 Flutter 的方向映射表。
-     *
-     * 【为什么必须走原生】
-     * Dart 的 `SystemChrome.setPreferredOrientations` 会被引擎的
-     * `PlatformChannel.decodeOrientations` 翻译成一组固定常量：
-     * `-1/0/1/2/8/9/11/12/13`。里面**没有** SENSOR 系列
-     * （SENSOR=4、SENSOR_LANDSCAPE=6、FULL_SENSOR=10），
-     * 所以传什么组合都只能拿到「受系统旋转锁定影响」的那几个值。
-     *
-     * 现象就是：系统关掉自动旋转后，全屏画面不跟着手机翻转；
-     * 而 B站 / 腾讯视频用的是 SENSOR_LANDSCAPE，可以翻。
-     * 这是本项目「不改 Dart 侧方向 API 就做不到」的唯一出路。
+     * 点击全屏和物理旋转分别处理。只请求明确的方向，旋转动画由系统负责。
      *
      * @param mode
-     *  - "landscape" 全屏看横屏内容：SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-     *                只允许横屏，左右由传感器决定。**无视系统旋转锁**，
-     *                所以关掉系统自动旋转也能跟着手机翻；
-     *                同时它永远出不了竖屏，横屏内容不会因为转手机变竖。
-     *  - "portrait"  全屏看竖屏内容：SCREEN_ORIENTATION_PORTRAIT
-     *                锁死竖屏，转手机也不动（「竖屏不处理」）。
-     *                必须显式锁，否则上一次看横屏流残留的 SENSOR_LANDSCAPE
-     *                会把竖屏内容强行掰成横屏。
+     *  - "landscape" 明确指定初始横屏方向，之后仅在有效横向姿态稳定时翻向。
+     *  - "portrait"  竖屏内容全屏时锁定竖屏，不响应左右横屏姿态。
      *  - "auto"      非全屏 / 退出播放器：恢复进入全屏前的方向策略。
      *                先恢复实际窗口方向，再恢复策略，避免厂商小窗保留全屏横向尺寸。
+     *  - "restore"   只恢复并固定实际窗口方向，退出动画结束后再调用 auto。
      */
     fun setScreenOrientation(mode: String?) {
         val act = activity ?: return
         if (mode == "landscape" || mode == "portrait") {
+            cancelPendingLandscapeChange()
             val requested = orientationBeforeFullscreen
             val savedWindowOrientation = windowOrientationBeforeFullscreen
+            val savedWindowRotation = windowRotationBeforeFullscreen
             clearOrientationRestore()
             if (requested == null) {
                 orientationBeforeFullscreen = act.requestedOrientation
                 windowOrientationBeforeFullscreen = windowOrientation(act)
+                windowRotationBeforeFullscreen = act.window.decorView.display?.rotation
             } else {
                 orientationBeforeFullscreen = requested
                 windowOrientationBeforeFullscreen = savedWindowOrientation
+                windowRotationBeforeFullscreen = savedWindowRotation
             }
-            act.requestedOrientation = if (mode == "landscape") {
-                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            landscapeFullscreen = mode == "landscape"
+            orientationChangeAllowedAt = SystemClock.uptimeMillis() + 600L
+            act.requestedOrientation = if (landscapeFullscreen) {
+                landscapeOrientationForDevice(deviceOrientation)
+                    ?: if (windowOrientation(act) == Configuration.ORIENTATION_LANDSCAPE) {
+                        orientationForWindow(
+                            Configuration.ORIENTATION_LANDSCAPE,
+                            act.window.decorView.display?.rotation
+                        )
+                    } else ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             } else {
                 ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             }
             return
         }
+        stopLandscapeOrientationChanges()
         val target = windowOrientationBeforeFullscreen ?: return
+        val requestedTarget = orientationForWindow(target, windowRotationBeforeFullscreen)
+        if (mode == "restore") {
+            act.requestedOrientation = requestedTarget
+            return
+        }
         if (orientationRestoreListener != null) return
         if (windowOrientation(act) == target) {
             finishOrientationRestore(act)
@@ -532,11 +635,7 @@ class NativePlayerManager private constructor() {
         orientationRestoreTimeout = Runnable {
             if (activity === act) finishOrientationRestore(act)
         }.also { mainHandler.postDelayed(it, 2000L) }
-        act.requestedOrientation = if (target == Configuration.ORIENTATION_LANDSCAPE) {
-            ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-        } else {
-            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-        }
+        act.requestedOrientation = requestedTarget
         Log.d(TAG, "restore window orientation: $target")
     }
 
@@ -734,20 +833,8 @@ class NativePlayerManager private constructor() {
                 result.success(true)
             }
 
-            // 播放器全屏方向控制。
-            //
-            // 【为什么不用 Dart 的 SystemChrome.setPreferredOrientations】
-            // Flutter 引擎把 DeviceOrientation 列表映射成一小组固定常量
-            // （见 PlatformChannel.decodeOrientations：-1/0/1/2/8/9/11/12/13），
-            // 其中**没有** SCREEN_ORIENTATION_SENSOR 系列。
-            // 传入 [landscapeLeft, landscapeRight] 只能得到 USER_LANDSCAPE，
-            // 受系统「旋转锁定」约束 —— 于是关掉系统自动旋转后，
-            // 全屏画面根本不会跟着手机翻转，而 B站/腾讯视频是可以的。
-            //
-            // 这里直接调 Activity.setRequestedOrientation 下发 SENSOR 系列常量，
-            // 它们的语义就是「只看物理传感器，无视系统的旋转锁定开关」。
-            //
-            // arguments: "landscape" / "portrait" / "auto"
+            // 初始方向由点击决定，后续翻向由稳定的物理姿态决定。
+            // arguments: "landscape" / "portrait" / "restore" / "auto"
             "setScreenOrientation" -> {
                 setScreenOrientation(arguments as? String)
                 result.success(true)
@@ -797,8 +884,7 @@ class NativePlayerManager private constructor() {
             // 表现为「从后台/小窗回到播放页一直转圈」。
             "hasRenderedFrame" -> result.success(frameConsumed)
 
-            // 清空纹理里残留的上一路流的画面，并把首帧标记复位。
-            // 进入非小窗的播放页时调用，避免「加载中却显示上一个直播的最后一帧」。
+            // 复位首帧标记，加载层持续遮住旧帧，直到新流输出并消费画面。
             "clearTexture" -> {
                 clearTexture()
                 result.success(true)
@@ -987,16 +1073,17 @@ class NativePlayerManager private constructor() {
 
         return try {
             val entry = engine.renderer.createSurfaceTexture()
-            // 直播常见 1080p，先按 1920x1080 分配 buffer。
-            // SurfaceTexture 的 Surface 句柄直到 release 前都有效，
-            // 不会像 SurfaceProducer.setSize 那样作废旧 Surface。
-            entry.surfaceTexture().setDefaultBufferSize(1920, 1080)
+            // 引擎重建时视频尺寸可能不再回调，必须沿用当前流的尺寸。
+            entry.surfaceTexture().setDefaultBufferSize(
+                if (videoWidth > 0) videoWidth else 1920,
+                if (videoHeight > 0) videoHeight else 1080
+            )
 
             // 首个视频帧被 Flutter 渲染管线消费掉，才说明画面真正可见。
             // 在此之前纹理是空的，Dart 侧会盖一层 loading，避免出现黑灰空屏。
             frameConsumed = false
             entry.setOnFrameConsumedListener {
-                if (!frameConsumed) {
+                if (frameProduced && !frameConsumed) {
                     frameConsumed = true
                     emit("firstFrame")
                 }
@@ -1047,38 +1134,11 @@ class NativePlayerManager private constructor() {
         textureId = -1L
     }
 
-    /**
-     * 把页内纹理的画面「清空」并把首帧标记复位。
-     *
-     * 【解决的问题】
-     * 纹理是全局单例复用的（见 [initTexture]），里面始终留着**上一路流**
-     * 的最后一帧。进入另一个直播间的播放页时，如果只是把 Dart 侧的
-     * `hasRenderedFirstFrame` 置 false，纹理里那一帧仍然会被 Flutter 合成出来，
-     * 用户看到的就是「加载中却显示上一个直播的画面」。
-     *
-     * 【为什么不能只 releaseTexture】
-     * release 会让 textureId 变成 -1，Dart 侧 Texture 控件随即卸载，
-     * 之后再进页面要重新走 initTexture，等于把「复用纹理」这个优化丢掉，
-     * 而且重建过程本身会闪一下。
-     *
-     * 这里用最小的代价：换一个新的 buffer 尺寸再换回来，
-     * 强制 SurfaceTexture 丢弃已有内容，纹理 id 与 Surface 句柄都不变。
-     * 同时把 [frameConsumed] 复位，让下一帧到来时照常发一次 firstFrame 事件。
-     */
+    /** 首帧前由 Flutter 的不透明加载层遮住旧帧，不再改动解码输出缓冲区。 */
     @Synchronized
     fun clearTexture() {
+        frameProduced = false
         frameConsumed = false
-        try {
-            val st = textureEntry?.surfaceTexture() ?: return
-            // 反复 setDefaultBufferSize 会触发 buffer 重新分配，旧帧被丢弃。
-            // 两次调用是必须的：单次设置若与当前尺寸相同，系统会直接忽略。
-            val w = if (videoWidth > 0) videoWidth else 1920
-            val h = if (videoHeight > 0) videoHeight else 1080
-            st.setDefaultBufferSize(1, 1)
-            st.setDefaultBufferSize(w, h)
-        } catch (e: Exception) {
-            Log.w(TAG, "clearTexture failed: $e")
-        }
     }
 
     // ---------------------------------------------------------------- 播放控制
@@ -1101,6 +1161,10 @@ class NativePlayerManager private constructor() {
             .build()
 
         exoPlayer.addListener(object : Player.Listener {
+            override fun onRenderedFirstFrame() {
+                frameProduced = true
+            }
+
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
                     Player.STATE_BUFFERING -> emit("buffering", mapOf("value" to true))
@@ -1150,11 +1214,7 @@ class NativePlayerManager private constructor() {
                 videoHeight = videoSize.height
                 videoAspect = newAspect.toDouble()
 
-                // buffer 尺寸每次都要跟着显示尺寸走，不能只在 sizeChanged 时设。
-                // 原因：clearTexture() 会临时把 buffer 改成 1×1 再改回来，
-                // 而这里的 changed 判断基于 videoWidth/videoHeight，
-                // 尺寸数值没变就会被判定为「没变」而跳过设置，
-                // buffer 尺寸一旦和视频比例不一致，ExoPlayer 就会拉伸画面填满。
+                // 缓冲区只跟随真实视频尺寸，绝不使用窗口或旋转包围盒的尺寸。
                 try {
                     textureEntry?.surfaceTexture()
                         ?.setDefaultBufferSize(videoSize.width, videoSize.height)
@@ -1472,6 +1532,7 @@ class NativePlayerManager private constructor() {
         currentUrl = url
         hasError = false
         // 新的一路流要从头算首帧
+        frameProduced = false
         frameConsumed = false
 
         val context = appContext ?: return

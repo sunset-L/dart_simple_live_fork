@@ -234,16 +234,7 @@ mixin PlayerMixin {
     await _syncVideoSize();
   }
 
-  /// 与原生侧同步视频尺寸
-  ///
-  /// `videoSize` 事件只在**尺寸发生变化**时发射（原生侧用 changed 去重）。
-  /// 复用播放器（小窗回到页面、再次进入同一主播）时这条流早就回调过了，
-  /// 新页面收不到事件，`videoAspectRatio` 会停在 16/9 的默认值、
-  /// `isVertical` 停留在平台猜测值。
-  ///
-  /// 直接后果就是这次反馈的「抖音横屏视频双击全屏不变横屏」：
-  /// 横屏抖音流被当成竖屏，全屏时走了「保持竖屏」分支。
-  /// 所以接管时必须主动查一次真实尺寸。
+  /// 复用播放器可能收不到尺寸变化事件，接管或切屏时主动同步真实比例。
   Future<void> _syncVideoSize() async {
     try {
       final size = await nativePlayer.getVideoSize();
@@ -260,30 +251,7 @@ mixin PlayerMixin {
     }
   }
 
-  /// 统一的「落地视频尺寸」入口
-  ///
-  /// 【为什么不能各处自己赋值】
-  /// `videoAspectRatio` 直接决定播放画面的高度预算
-  /// （见 live_room_page 的 `height: 1000 / aspect`），
-  /// 一旦它是一个离谱的值（极大），画面高度就被压成几个像素——
-  /// 用户看到的就是「画面被压缩成一条」。
-  ///
-  /// 而离谱值是真会出现的：
-  /// - 原生 `videoAspect` 由 `width * SAR / height` 得到，
-  ///   SAR（pixelWidthHeightRatio）在某些转码流里是脏数据；
-  /// - 播放器跨房间复用时，上一路流残留的 aspect 会短暂与新的 width/height 错配；
-  /// - 切换全屏时页面重建，`Obx` 会拿「此刻」的值重算高度预算。
-  ///
-  /// 【为什么是「拒绝写入」而不是「夹到边界」】
-  /// 原生侧按「值有没有变」去重（见 `onVideoSizeChanged` 的
-  /// `sizeChanged || aspectChanged`）。这是关键：
-  /// 如果这里把脏值夹到 4.0 再写进去，Dart 侧就是 4.0，
-  /// 而原生侧那边 `videoAspect` 已经等于那个脏值、不再算「变了」，
-  /// **不会补发一条正确事件**。于是错值一直粘住，直到换个清晰度或重启应用。
-  /// 表现为「用一段时间后切全屏画面永远是一条，重启才好」。
-  ///
-  /// 所以脏值必须**什么都不写**：保留上一个可信值，布局就不会塌。
-  /// 万一上一个值也没有，`videoAspectRatio` 仍停在 16/9 的初值，画面正常。
+  /// 交叉校验 SAR 和分辨率；无效比例保留旧值，不能夹到边界后永久写入。
   void _applyVideoSize(int w, int h, double? aspect) {
     if (w <= 0 || h <= 0) {
       return;
@@ -360,6 +328,9 @@ mixin PlayerStateMixin on PlayerMixin {
 
   /// 是否处于全屏状态
   RxBool fullScreenState = false.obs;
+
+  /// 切屏动画和系统方向交接期间禁止重复进入、退出。
+  RxBool fullScreenTransitioning = false.obs;
 
   /// 显示手势Tip
   RxBool showGestureTip = false.obs;
@@ -465,6 +436,11 @@ mixin PlayerDanmakuMixin on PlayerStateMixin {
 }
 
 mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
+  bool _systemDisposed = false;
+  bool _fullScreenLandscape = true;
+
+  bool get fullScreenLandscape => _fullScreenLandscape;
+
   /// 初始化一些系统状态
   void initSystem() async {
     VolumeController.instance.showSystemUI = false;
@@ -481,6 +457,8 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
 
   /// 释放一些系统状态
   Future resetSystem() async {
+    _systemDisposed = true;
+    fullScreenTransitioning.value = false;
     await SystemChrome.setEnabledSystemUIMode(
       SystemUiMode.edgeToEdge,
       overlays: SystemUiOverlay.values,
@@ -496,31 +474,75 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     await WakelockPlus.disable();
   }
 
-  /// 进入全屏
-  ///
-  /// 原实现是 `if (!isVertical.value) setLandscapeOrientation()`，
-  /// 即「竖屏流横屏时保持竖屏」。这个判断对抖音是错的：
-  /// - 抖音在控制器构造函数里被硬编码成 `isVertical = true`（因为抖音大量是竖屏直播），
-  ///   而这次 `videoSize` 回调如果因为复用播放器没有触发，`isVertical` 就一直是那个初值；
-  /// - 于是看横屏抖音直播时双击全屏，走进 `enterFullScreen` → 被 `!isVertical` 挡掉
-  ///   → 只隐藏了状态栏，方向完全没变，用户看到的就是「双击全屏没变横屏」。
-  ///
-  /// 正确判据应该是**当前视频画面本身**是不是竖的，而不是构造时的平台猜测：
-  /// 用 `videoAspectRatio`（由真实 `onVideoSizeChanged` 得来）判断，
-  /// 竖屏视频（比例 < 1）全屏时保持竖屏，横屏视频转横屏。
-  void enterFullScreen() {
+  /// 按真实视频比例进入全屏，切屏期间阻止重复操作。
+  Future<void> enterFullScreen() async {
+    if (_systemDisposed ||
+        fullScreenState.value ||
+        fullScreenTransitioning.value) {
+      return;
+    }
+    FocusManager.instance.primaryFocus?.unfocus();
+    fullScreenTransitioning.value = true;
+    await _syncVideoSize();
+    if (_systemDisposed) return;
+    _fullScreenLandscape = isLandscapeVideo;
     fullScreenState.value = true;
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
-    if (isLandscapeVideo) {
-      setLandscapeOrientation();
-    } else {
-      // 竖屏内容全屏：锁死竖屏，转手机也不动。
-      //
-      // 不能「什么都不做」：上一次看横屏流会把方向留成 SENSOR_LANDSCAPE，
-      // 不显式改的话竖屏内容会被强行掰成横屏。
-      // 也不能 setAutoOrientation：那会跟随手机转成横屏，
-      // 用户明确要求「竖屏不处理，也不要旋转成横屏」。
-      setPortraitOrientation();
+    try {
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
+          overlays: []);
+      if (_systemDisposed) return;
+      if (_fullScreenLandscape) {
+        await setLandscapeOrientation();
+      } else {
+        await setPortraitOrientation();
+      }
+      final reached = await _waitForScreenOrientation(_fullScreenLandscape);
+      if (!_systemDisposed && !reached) {
+        final size = WidgetsBinding
+            .instance.platformDispatcher.implicitView?.physicalSize;
+        if (size != null) _fullScreenLandscape = size.width > size.height;
+        Log.w("系统未响应全屏方向请求，按实际窗口方向显示");
+      }
+    } catch (e) {
+      Log.logPrint(e);
+    } finally {
+      if (!_systemDisposed) {
+        fullScreenTransitioning.value = false;
+      }
+    }
+  }
+
+  Future<bool> _waitForScreenOrientation(bool landscape) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (!_systemDisposed && DateTime.now().isBefore(deadline)) {
+      final size =
+          WidgetsBinding.instance.platformDispatcher.implicitView?.physicalSize;
+      if (size == null || (size.width > size.height) == landscape) break;
+      await Future<void>.delayed(const Duration(milliseconds: 16));
+    }
+    // 原生完成窗口 resize 不代表系统截图旋转动画已结束。
+    await Future<void>.delayed(const Duration(milliseconds: 320));
+    final size =
+        WidgetsBinding.instance.platformDispatcher.implicitView?.physicalSize;
+    return size == null || (size.width > size.height) == landscape;
+  }
+
+  /// 退出方向已经落地、资料区淡入完成后再释放原来的方向策略。
+  Future<void> completeInlineRestore() async {
+    if (_systemDisposed ||
+        !fullScreenTransitioning.value ||
+        fullScreenState.value) {
+      return;
+    }
+    try {
+      await setAutoOrientation();
+      if (_systemDisposed) return;
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge,
+          overlays: SystemUiOverlay.values);
+    } catch (e) {
+      Log.logPrint(e);
+    } finally {
+      fullScreenTransitioning.value = false;
     }
   }
 
@@ -532,25 +554,22 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
 
   /// 退出全屏
   void exitFull() {
+    if (_systemDisposed ||
+        !fullScreenState.value ||
+        fullScreenTransitioning.value) {
+      return;
+    }
+    fullScreenTransitioning.value = true;
     // 退出全屏时参数面板不可见，必须顺手停掉采集，
     // 否则它会以「已打开」的状态继续在后台轮询。
     closeMetricsPanel();
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge,
-        overlays: SystemUiOverlay.values);
-    setAutoOrientation();
+    // 先固定到进入前的窗口方向，缩回动画完成后再释放方向策略。
+    nativePlayer.setScreenOrientation("restore");
     fullScreenState.value = false;
+    _syncVideoSize();
   }
 
-  /// 全屏看横屏内容：按手机物理方向横过来
-  ///
-  /// 走原生 `SENSOR_LANDSCAPE`（不是 Dart 的 `setPreferredOrientations`）。
-  /// 原因见 [NativePlayerBridge.setScreenOrientation]：
-  /// Flutter 的方向映射表里根本没有 SENSOR 系列，传
-  /// `[landscapeLeft, landscapeRight]` 只能得到 USER_LANDSCAPE，
-  /// **受系统「旋转锁定」约束**——用户关掉系统自动旋转后画面就不跟着翻了。
-  /// 换成 SENSOR_LANDSCAPE 后：
-  /// - 手机横着拿（左横或右横）→ 画面按那一侧正过来，与系统旋转锁无关；
-  /// - 手机竖着拿 → 仍是横屏，不会把横屏内容掰成竖屏。
+  /// 原生明确指定横屏方向，只在真实横向姿态稳定后切换左右横屏。
   Future setLandscapeOrientation() async {
     await nativePlayer.setScreenOrientation("landscape");
   }

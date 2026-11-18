@@ -229,23 +229,13 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     loadData();
   }
 
-  /// 进入非小窗播放页时重置播放器
-  ///
-  /// 纹理是全局单例复用的，上一路流的最后一帧会一直留在里面。
-  /// 这里做两件事：
-  /// 1. 停掉原生播放器里可能还在跑的上一条流（释放解码器与网络连接）；
-  /// 2. 清空纹理内容并把首帧标记复位，让页面从「黑屏 + loading」开始。
-  ///
-  /// 只重置、不释放纹理：纹理 id 保持不变，Dart 侧 Texture 控件不用重建，
-  /// 也就不会有额外的闪烁。
+  /// 普通进房先停止旧流、复位首帧状态，加载层遮住旧画面但不重建纹理。
   Future<void> _resetPlayerForFreshEntry() async {
     try {
       await nativePlayer.stop();
     } catch (e) {
       Log.logPrint(e);
     }
-    // 首帧标记必须在清纹理之前复位，反过来会被 clearTexture 里的
-    // 逻辑重新盖成 true（它内部也会复位，但顺序明确更稳妥）。
     hasRenderedFirstFrame.value = false;
     try {
       await nativePlayer.clearTexture();
