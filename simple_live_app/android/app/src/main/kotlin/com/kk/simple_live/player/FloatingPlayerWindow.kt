@@ -11,14 +11,11 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorFilter
 import android.graphics.Matrix
+import android.graphics.Outline
 import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.PixelFormat
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffXfermode
 import android.graphics.RadialGradient
 import android.graphics.Rect
-import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.SurfaceTexture
 import android.graphics.drawable.Drawable
@@ -35,6 +32,7 @@ import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
+import android.view.ViewOutlineProvider
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
@@ -351,7 +349,7 @@ class FloatingPlayerWindow(
 
     fun updateSettings(radiusDp: Float, enableDock: Boolean) {
         cornerRadiusDp = if (radiusDp.isFinite()) radiusDp.coerceIn(0f, MAX_CORNER_RADIUS_DP) else 0f
-        rootView?.invalidate()
+        rootView?.invalidateOutline()
         dockEnabled = enableDock
         if (!enableDock) {
             rememberedDockSide = null
@@ -386,39 +384,12 @@ class FloatingPlayerWindow(
 
         screenArea = currentScreenArea()
         val container = object : FrameLayout(context) {
-            private val cornerMask = Path()
-            private val maskBounds = RectF()
-            private var maskRadius = -1f
-            private val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.BLACK
-                xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
-            }
-
             // 统一处理关闭热区和多指手势，避免子按钮吞掉缩放的第一根手指。
             override fun onInterceptTouchEvent(event: MotionEvent): Boolean = true
 
-            override fun draw(canvas: Canvas) {
-                val radius = min(cornerRadiusDp * density, min(width, height) / 2f)
-                if (radius <= 0f) {
-                    super.draw(canvas)
-                    return
-                }
-                if (maskRadius != radius ||
-                    maskBounds.width() != width.toFloat() ||
-                    maskBounds.height() != height.toFloat()
-                ) {
-                    maskRadius = radius
-                    maskBounds.set(0f, 0f, width.toFloat(), height.toFloat())
-                    cornerMask.reset()
-                    cornerMask.fillType = Path.FillType.EVEN_ODD
-                    cornerMask.addRect(maskBounds, Path.Direction.CW)
-                    cornerMask.addRoundRect(maskBounds, radius, radius, Path.Direction.CW)
-                }
-                // 将黑底和视频一起合成再清掉四角，避免硬裁剪或黑色边缘残留。
-                val layer = canvas.saveLayer(maskBounds, null)
-                super.draw(canvas)
-                canvas.drawPath(cornerMask, maskPaint)
-                canvas.restoreToCount(layer)
+            override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+                super.onSizeChanged(w, h, oldw, oldh)
+                invalidateOutline()
             }
 
             override fun onConfigurationChanged(newConfig: Configuration) {
@@ -459,6 +430,15 @@ class FloatingPlayerWindow(
             }
 
             override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {}
+        }
+
+        // 圆角裁切
+        container.clipToOutline = true
+        container.outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: Outline) {
+                val radius = min(cornerRadiusDp * density, min(view.width, view.height) / 2f)
+                outline.setRoundRect(0, 0, view.width, view.height, radius)
+            }
         }
 
         // 弹幕层：叠在视频画面之上、关闭按钮之下。
