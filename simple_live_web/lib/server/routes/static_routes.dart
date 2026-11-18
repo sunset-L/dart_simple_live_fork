@@ -16,7 +16,7 @@ Future<void> serveStatic(HttpRequest request) async {
   }
   final path = segments.where((s) => s.isNotEmpty).join('/');
   final isPlayback = RegExp(
-    r'^playback/(bilibili|douyu|huya|douyin)/[A-Za-z0-9_-]{1,100}$',
+    r'^(live|playback)/(bilibili|douyu|huya|douyin)/[A-Za-z0-9_-]{1,100}$',
   ).hasMatch(path);
   final file = File('dist/${path.isEmpty || isPlayback ? 'index.html' : path}');
   if (!await file.exists()) {

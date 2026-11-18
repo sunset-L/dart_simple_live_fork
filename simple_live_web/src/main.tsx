@@ -6,6 +6,16 @@ import { initializeLibrary } from "./stores/libraryStorage";
 import { initializePreferences } from "./stores/preferencesStorage";
 import "./styles/app.css";
 
+const legacyRoom = location.pathname.match(
+  /^\/playback\/(bilibili|douyu|huya|douyin)\/([A-Za-z0-9_-]{1,100})$/,
+);
+if (legacyRoom)
+  history.replaceState(
+    history.state,
+    "",
+    `/live/${legacyRoom[1]}/${legacyRoom[2]}${location.search}${location.hash}`,
+  );
+
 const root = createRoot(document.getElementById("root")!);
 const app = (
   <React.StrictMode>
@@ -14,7 +24,7 @@ const app = (
     </AppearanceProvider>
   </React.StrictMode>
 );
-if (location.pathname.startsWith("/playback/")) {
+if (location.pathname.startsWith("/live/")) {
   root.render(app);
   void initializeLibrary();
   void initializePreferences();

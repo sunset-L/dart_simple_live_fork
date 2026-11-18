@@ -51,7 +51,7 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
     () => matchMedia("(prefers-color-scheme: dark)").matches,
   );
   const dark =
-    location.pathname.startsWith("/playback/") ||
+    location.pathname.startsWith("/live/") ||
     (mode === "system" ? systemDark : mode === "dark");
   useEffect(() => {
     const media = matchMedia("(prefers-color-scheme: dark)");

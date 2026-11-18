@@ -60,7 +60,7 @@ export function App() {
     "follow",
   );
   const playbackMatch = location.pathname.match(
-    /^\/playback\/(bilibili|douyu|huya|douyin)\/([A-Za-z0-9_-]{1,100})$/,
+    /^\/live\/(bilibili|douyu|huya|douyin)\/([A-Za-z0-9_-]{1,100})$/,
   );
   const [site, setSite] = useState("bilibili");
   const [data, setData] = useState(() => loadLibrary().data);

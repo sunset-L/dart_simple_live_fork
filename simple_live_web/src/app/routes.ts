@@ -1,7 +1,7 @@
 export type Page =
   "home" | "follow" | "category" | "mine" | "sync" | "history" | "blocked";
 export function playbackUrl(site: string, roomId: string) {
-  return `/playback/${encodeURIComponent(site)}/${encodeURIComponent(roomId)}`;
+  return `/live/${encodeURIComponent(site)}/${encodeURIComponent(roomId)}`;
 }
 const playbackTabs = new Map<string, Window>();
 export function openPlayback(site: string, roomId: string) {
