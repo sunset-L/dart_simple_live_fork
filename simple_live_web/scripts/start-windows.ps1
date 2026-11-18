@@ -465,7 +465,7 @@ try {
     }
     $webPort = Select-Port $env:SIMPLE_LIVE_WEB_PORT 23236 @()
     $apiPort = Select-Port $env:PORT 23238 @($webPort)
-    Write-Host '先使用现有工具和项目依赖直接启动，不下载安装。'
+    [Console]::WriteLine('使用现有环境直接启动，不下载或安装工具。')
     try {
         $running = Start-Services $tools $webPort $apiPort
     } catch {
