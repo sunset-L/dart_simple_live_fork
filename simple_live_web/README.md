@@ -227,13 +227,44 @@ native/windows-x64/   随项目分发的 QuickJS DLL、版本清单和许可证
 
 ## Windows 便携发布包
 
-已准备依赖的 Windows x64 开发环境中运行：
+### 自己打包
 
-```sh
-npm run package:windows
+在 `simple_live_web` 文件夹打开终端，执行下面一条命令即可。PowerShell 使用 `npm.cmd`，避免系统执行策略阻止 `npm.ps1`：
+
+```powershell
+npm.cmd run package:windows
 ```
 
-此命令使用现有 Node.js 和 Dart SDK，构建一次网页静态资源及后端 kernel，生成 `release/simple-live-web-<版本>-windows-x64-<时间>/` 和同名 ZIP。输出实际压缩前后大小；不安装工具、不运行测试、不进行 Android 打包。需要指定 SDK 时设置 `DART_EXECUTABLE`。
+如果当前终端在仓库根目录，先执行 `cd simple_live_web`。命令提示符 CMD 也可使用 `npm run package:windows`。源码根目录的 `start.bat` 用于开发服务启动，不是打包命令。
+
+打包电脑需要已有 Windows x64、Node.js、完整 Dart SDK、Git 和准备好的项目依赖，并保留完整仓库及相邻的 `simple_live_core`。这是构建环境要求，使用 ZIP 的电脑不需要这些开发工具。
+
+构建脚本按以下顺序查找 Dart SDK：`DART_EXECUTABLE` 指定路径、仓库 `.task-cache/fvm/versions/3.47.1/bin/cache/dart-sdk/bin/dart.exe`、Web 目录 `.runtime/dart-sdk/bin/dart.exe`、系统 PATH。当前电脑的仓库内 SDK 可直接复用；找不到或 SDK 不完整时明确报错，不自动下载安装。需要指定其他已有 SDK 时，在同一个 PowerShell 窗口执行：
+
+```powershell
+$env:DART_EXECUTABLE = 'D:\tools\dart-sdk\bin\dart.exe'
+npm.cmd run package:windows
+```
+
+首次准备源码环境或依赖缺失时，按本文前面的「手动双终端运行」说明准备锁定依赖；依赖未变化且已可正常开发时，不需要重复执行 `npm ci` 或 `dart pub get`。不要绕过现有脚本直接运行 `dart build cli` 或 `dart run bin/server.dart` 来打包，它们会进入上游 QuickJS 的 C 编译流程。
+
+命令会自动检查 TypeScript、构建生产网页、校验仓库内 QuickJS DLL 及其对应源码版本、编译可移动的后端 kernel、收集运行文件和许可证，最后生成 ZIP；无需提前单独运行 `npm run build`。不会运行测试或进行 Android 打包。
+
+### 产物和交付
+
+成功后终端会打印便携目录、ZIP 的完整路径及实际压缩前后大小，产物位于 Web 根目录下：
+
+```text
+release/
+  simple-live-web-<版本>-windows-x64-<UTC时间>/
+  simple-live-web-<版本>-windows-x64-<UTC时间>.zip
+```
+
+版本号取自 `simple_live_web/package.json` 的 `version`，时间后缀区分每次构建。只有终端显示打包成功且生成 ZIP 才算完成；失败时可能残留未完成目录，不要将其交付。脚本默认只输出到 `release`，不会自动复制到本地分享目录、推送 Git 或上传发布。
+
+交付完整 ZIP 即可，不要只发 `start.bat`、`server.dill` 或 `dist` 文件夹。上次交付包为约 22.1 MiB ZIP、解压后约 58.6 MiB，后续大小以实际构建输出为准。`release` 已被 Git 忽略，不能把二进制产物、个人配置或运行缓存提交到仓库。
+
+### 运行和更新
 
 - 完整解压 ZIP 后双击其中的 `start.bat`。随包提供 Dart VM、后端 kernel 和已校验的 QuickJS DLL，接收电脑无需 Node.js、Dart SDK、Git、Visual Studio 或 Windows SDK，首次启动不下载安装资源。
 - 正式版只启动一个本机 Dart 服务，同时托管网页、API 与弹幕连接。默认端口 23236，遇占用自动选择后续空闲端口；服务就绪后由默认浏览器打开实际地址。`SIMPLE_LIVE_WEB_PORT` 优先于 `PORT`。
@@ -244,6 +275,15 @@ npm run package:windows
 - `portable.json` 记录版本、源提交、运行时版本和文件摘要；`licenses` 保留第三方许可。后端 kernel 中 QuickJS 使用相对路径，程序目录可移动。ZIP、构建输出和运行缓存不提交 Git。
 
 便携包内的 `README.md` 提供使用、更新和配置说明。不要直接在压缩软件内部运行启动器。
+
+### 后续 AI 操作约定
+
+- 用户要求「打包 Web 便携版」时，使用 `simple_live_web` 下的 `npm.cmd run package:windows`，按此流程生成 Windows x64 完整 ZIP；不要切换到 Flutter/Android 打包，也不要重建 QuickJS DLL。
+- 日常开发仍用源码 `start.bat` 和 Vite 热更新；用户只要求修改文档时，不因此运行构建、启动服务或新增测试。构建不是默认的开发启动步骤。
+- 先检查工作区并保留用户改动。源码有修改时先完成必要静态检查，按仓库约定提交本次改动，再生成最终交付包，使 `portable.json` 中的源提交号能对应实现。文档修改只做文档核对及本地提交即可。
+- 工具已齐全时直接复用，不重复下载安装或获取无关依赖。确需安装新工具时，先向用户说明用途、来源及替代方案，取得明确同意；不要安装 Visual Studio、Windows SDK 或其他系统工具来绕过打包错误。
+- 不自动新增或运行单元、UI、集成和回归测试；实际直播播放及交互由用户验收。只有用户明确要求启动/退出等运行验证时才做，并使用独立临时数据目录，不占用或停止现有开发服务，不修改真实账号及 WebDAV 配置。
+- 打包后核对成功输出和产物清单，汇报 ZIP 路径、体积、源码提交号及实际完成的检查。用户要求复制交付时可复制到 `D:\本地分享\workspace`；不要声称脚本已自动复制。仅在用户明确要求时推送远端或发布 Release。
 
 ## 检查
 
