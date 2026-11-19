@@ -1,7 +1,9 @@
 ﻿[CmdletBinding()]
 param(
     [switch]$CheckOnly,
-    [switch]$Worker
+    [switch]$Worker,
+    [switch]$Portable,
+    [switch]$NoBrowser
 )
 
 $ErrorActionPreference = 'Stop'
@@ -101,6 +103,7 @@ public sealed class SimpleLiveProcessGroup : IDisposable {
             if (!AssignProcessToJobObject(job, info.Process))
                 throw new Win32Exception();
             var process = Process.GetProcessById((int)info.ProcessId);
+            var processHandle = process.Handle;
             if (ResumeThread(info.Thread) == uint.MaxValue)
                 throw new Win32Exception();
             return process;
@@ -133,6 +136,8 @@ if (-not $Worker) {
         $arguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File ' +
             (Quote-Argument $PSCommandPath) + ' -Worker'
         if ($CheckOnly) { $arguments += ' -CheckOnly' }
+        if ($Portable) { $arguments += ' -Portable' }
+        if ($NoBrowser) { $arguments += ' -NoBrowser' }
         $process = $group.Start($powershell, $arguments, $root)
         $process.WaitForExit()
         $code = $process.ExitCode
@@ -417,6 +422,84 @@ function Start-Services([hashtable]$Tools, [int]$WebPort, [int]$ApiPort) {
             }
         }
         throw
+    }
+}
+
+function Start-Portable {
+    $services = $null
+    $api = $null
+    try {
+        if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or
+            $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64' -or -not [Environment]::Is64BitOperatingSystem) {
+            throw '便携版仅支持 Windows 10/11 x64，不支持 Windows ARM64 或 32 位系统'
+        }
+        Set-Location -LiteralPath $root
+        $manifestPath = Join-Path $root 'portable.json'
+        if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+            throw '缺少 portable.json，请完整解压便携 ZIP 后重新启动'
+        }
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($manifest.format -ne 1 -or $manifest.architecture -ne 'windows_x64') {
+            throw '便携包清单格式或架构不受支持，请下载 Windows x64 完整包'
+        }
+        foreach ($file in @('runtime/dartvm.exe', 'server/server.dill', 'native/dart_quickjs.dll', 'dist/index.html')) {
+            $entry = $manifest.files | Where-Object { $_.path -eq $file } | Select-Object -First 1
+            $path = Join-Path $root $file
+            if (-not $entry -or -not (Test-Path -LiteralPath $path -PathType Leaf) -or
+                (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $entry.sha256) {
+                throw "文件缺失或校验失败：$file。请重新解压完整便携包。"
+            }
+        }
+        Write-Host "Simple Live Web $($manifest.version) - Windows x64 便携版" -ForegroundColor Cyan
+        Write-Host '运行所需资源已随包提供，无需安装或下载开发工具。'
+        if ($CheckOnly) {
+            Write-Host '便携版文件检查通过；未启动服务。' -ForegroundColor Green
+            return
+        }
+        $configuredPort = $env:SIMPLE_LIVE_WEB_PORT
+        if (-not $configuredPort) { $configuredPort = $env:PORT }
+        $port = Select-Port $configuredPort 23236 @()
+        $env:PORT = "$port"
+        $env:SIMPLE_LIVE_SERVE_STATIC = '1'
+        Initialize-ProcessGroup
+        $services = New-Object SimpleLiveProcessGroup
+        $api = $services.Start(
+            (Join-Path $root 'runtime\dartvm.exe'),
+            (Quote-Argument (Join-Path $root 'server\server.dill')), $root
+        )
+        $url = "http://127.0.0.1:$port"
+        Wait-Ready $api "$url/api/health" $true
+        Wait-Ready $api "$url/" $false
+        Write-Host ''
+        Write-Host "网页访问地址：$url" -ForegroundColor Green
+        Write-Host "本机数据目录：$(if ($env:SIMPLE_LIVE_DATA_DIR) { $env:SIMPLE_LIVE_DATA_DIR } else { Join-Path $env:APPDATA 'simple-live-web' })"
+        Write-Host '关闭此命令窗口或按 Ctrl+C 即停止本次服务；关闭浏览器不会退出服务。'
+        if (-not $NoBrowser) {
+            try {
+                # Explorer opens the browser outside the service job so cleanup only stops our server.
+                $shell = New-Object -ComObject Shell.Application
+                try { $shell.ShellExecute($url) }
+                finally { [Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null }
+            } catch {
+                Write-Host '无法自动打开默认浏览器，请手动访问上面的网页地址。' -ForegroundColor Yellow
+            }
+        }
+        while (-not $api.HasExited) { Start-Sleep -Seconds 1 }
+        throw "服务已退出（退出码 $($api.ExitCode)），请查看上方错误信息"
+    } finally {
+        if ($services) { $services.Dispose() }
+        if ($api) { $api.Dispose() }
+    }
+}
+
+if ($Portable) {
+    try {
+        Start-Portable
+        exit 0
+    } catch {
+        Write-Host "便携版启动失败：$($_.Exception.Message)" -ForegroundColor Red
+        Write-Host '请完整解压 ZIP，不要直接在压缩包内运行。不会自动下载或安装工具。'
+        exit 1
     }
 }
 

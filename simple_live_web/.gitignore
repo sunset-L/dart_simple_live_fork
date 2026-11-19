@@ -1,5 +1,6 @@
 node_modules/
 dist/
+release/
 .dart_tool/
 .runtime/
 *.log

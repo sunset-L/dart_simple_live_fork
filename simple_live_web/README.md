@@ -4,6 +4,8 @@
 
 ## Windows 双击启动
 
+以下为源码开发模式；无需开发工具的正式版使用下方「Windows 便携发布包」。
+
 使用 Windows 10/11 x64，从完整仓库中的 `simple_live_web` 目录双击 **`start.bat`**：
 
 - 自动检查 Node.js、完整 Dart SDK、Git 及随项目提供的 QuickJS DLL，准备依赖时必须保留已提交的锁文件。必须同时保留相邻的 `simple_live_core` 和其中的 `packages/tars_dart`，不能只复制网页目录。
@@ -222,6 +224,26 @@ native/windows-x64/   随项目分发的 QuickJS DLL、版本清单和许可证
 关注、标签、历史和屏蔽词通过 `/api/library` 写入固定的本地数据文件。保存成功后才更新界面；使用版本检查、跨进程文件锁和临时文件替换，避免多端口或多标签页互相覆盖。首次打开或手动刷新时读取，不定时查询或在切回页面时自动请求，也没有服务端变更通知。文件损坏时停止写入，保留原始数据导出和确认清除入口；连接失败时只提供重试。
 
 首次访问新版时，自动合并当前浏览器来源下旧版 `localStorage` 数据，保留原始数据并记录迁移标记。浏览器不能直接读取其他端口的旧存储，因此已有旧关注的每个地址需要用新版访问一次；之后切换任意端口无需再次迁移。关注、账号、主题和播放器设置均保存到本机服务的数据目录，清除浏览器站点数据不会删除这些文件。
+
+## Windows 便携发布包
+
+已准备依赖的 Windows x64 开发环境中运行：
+
+```sh
+npm run package:windows
+```
+
+此命令使用现有 Node.js 和 Dart SDK，构建一次网页静态资源及后端 kernel，生成 `release/simple-live-web-<版本>-windows-x64-<时间>/` 和同名 ZIP。输出实际压缩前后大小；不安装工具、不运行测试、不进行 Android 打包。需要指定 SDK 时设置 `DART_EXECUTABLE`。
+
+- 完整解压 ZIP 后双击其中的 `start.bat`。随包提供 Dart VM、后端 kernel 和已校验的 QuickJS DLL，接收电脑无需 Node.js、Dart SDK、Git、Visual Studio 或 Windows SDK，首次启动不下载安装资源。
+- 正式版只启动一个本机 Dart 服务，同时托管网页、API 与弹幕连接。默认端口 23236，遇占用自动选择后续空闲端口；服务就绪后由默认浏览器打开实际地址。`SIMPLE_LIVE_WEB_PORT` 优先于 `PORT`。
+- 保留命令窗口显示状态，关闭窗口或按 Ctrl+C 清理本次服务；关闭浏览器不关闭服务。浏览器由系统外壳打开，退出启动器不会关闭用户浏览器。
+- 个人数据沿用 `%APPDATA%\simple-live-web`（或 `SIMPLE_LIVE_DATA_DIR` 指定目录），不会把构建机的账号、Cookie、WebDAV 配置、关注列表打入包中。
+- 手动更新时先关闭旧版窗口，再解压新版完整 ZIP 到新目录启动即可；默认数据目录不变。源码开发版 `start.bat` 仍使用 Vite 热更新，便携发布构建不会改变它的启动方式。
+- `start.bat -CheckOnly` 检查核心文件；`start.bat -NoBrowser` 不自动打开浏览器。便携包只支持 Windows 10/11 x64；网页静态资源可离线加载，观看直播仍需联网。
+- `portable.json` 记录版本、源提交、运行时版本和文件摘要；`licenses` 保留第三方许可。后端 kernel 中 QuickJS 使用相对路径，程序目录可移动。ZIP、构建输出和运行缓存不提交 Git。
+
+便携包内的 `README.md` 提供使用、更新和配置说明。不要直接在压缩软件内部运行启动器。
 
 ## 检查
 

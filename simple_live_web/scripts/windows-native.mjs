@@ -6,7 +6,7 @@ import {
   readdirSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -28,7 +28,15 @@ function sourceDigest(packageRoot) {
   return digest.digest("hex");
 }
 
-export function prepareWindowsServer(root, dart) {
+export function prepareWindowsServer(
+  root,
+  dart,
+  {
+    kernelPath,
+    nativeLibraryPath,
+    relativeNativeLibrary = false,
+  } = {},
+) {
   if (process.arch !== "x64") {
     throw new Error(
       "预编译 QuickJS 目前只支持 Windows x64，请使用 64 位 Node.js 和 Dart SDK。",
@@ -77,14 +85,24 @@ export function prepareWindowsServer(root, dart) {
   const cache = join(root, ".dart_tool/simple_live_web");
   mkdirSync(cache, { recursive: true });
   const assetsFile = join(cache, "native_assets.json");
-  const kernel = join(cache, "server.dill");
+  const kernel = kernelPath ?? join(cache, "server.dill");
+  const assetFile = nativeLibraryPath ?? library;
+  const assetPath = relativeNativeLibrary
+    ? relative(dirname(kernel), assetFile).split(sep).join("\\")
+    : assetFile;
+  if (relativeNativeLibrary && /^[A-Za-z]:\\/.test(assetPath)) {
+    throw new Error("便携 kernel 与 QuickJS DLL 必须位于同一磁盘，才能使用相对资源路径");
+  }
   writeFileSync(
     assetsFile,
     JSON.stringify({
       "format-version": [1, 0, 0],
       "native-assets": {
         [metadata.architecture]: {
-          [metadata.assetId]: ["absolute", library],
+          [metadata.assetId]: [
+            relativeNativeLibrary ? "relative" : "absolute",
+            assetPath,
+          ],
         },
       },
     }),
