@@ -1,11 +1,25 @@
 import { get } from "./apiClient";
 import type {
   DanmakuEvent,
+  PlaybackSession,
   Quality,
   RoomDetail,
   Source,
 } from "../types/playback";
 export const playbackApi = {
+  session: (
+    site: string,
+    roomId: string,
+    quality?: Quality | null,
+    signal?: AbortSignal,
+  ) => {
+    const query = new URLSearchParams({ site, roomId });
+    if (quality) {
+      query.set("qualityName", quality.quality);
+      query.set("sort", String(quality.sort));
+    }
+    return get<PlaybackSession>(`playback/session?${query}`, signal);
+  },
   detail: (site: string, roomId: string, signal?: AbortSignal) =>
     get<RoomDetail>(
       `playback/room?site=${encodeURIComponent(site)}&roomId=${encodeURIComponent(roomId)}`,

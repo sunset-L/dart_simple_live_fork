@@ -12,13 +12,72 @@ class LiveStatusRoutes {
   Future<Object> read(Uri uri) async {
     final siteId = uri.queryParameters['site'] ?? '';
     final roomId = uri.queryParameters['roomId'] ?? '';
+    return _readOne(
+      siteId,
+      roomId,
+      withProfile: uri.queryParameters['profile'] == '1',
+    );
+  }
+
+  Future<Map<String, dynamic>> readBatch(Object? value) async {
+    if (value is! List || value.length > 500) {
+      throw const FormatException('主播状态批量请求无效或过多');
+    }
+    final items = <({String id, String siteId, String roomId})>[];
+    final ids = <String>{};
+    for (final value in value) {
+      if (value is! Map<String, dynamic> ||
+          value['id'] is! String ||
+          value['siteId'] is! String ||
+          value['roomId'] is! String) {
+        throw const FormatException('主播状态批量请求字段无效');
+      }
+      final id = value['id'] as String;
+      if (id.isEmpty || id.length > 150 || !ids.add(id)) {
+        throw const FormatException('主播状态批量请求标识无效');
+      }
+      items.add((
+        id: id,
+        siteId: value['siteId'] as String,
+        roomId: value['roomId'] as String,
+      ));
+    }
+
+    final results = List<Map<String, dynamic>?>.filled(items.length, null);
+    var next = 0;
+    Future<void> worker() async {
+      while (next < items.length) {
+        final index = next++;
+        final item = items[index];
+        try {
+          final result = await _readOne(
+            item.siteId,
+            item.roomId,
+            withProfile: true,
+          );
+          results[index] = {'id': item.id, ...result};
+        } catch (_) {
+          results[index] = {'id': item.id, 'status': null, 'error': '开播状态查询失败'};
+        }
+      }
+    }
+
+    final workerCount = items.length < 4 ? items.length : 4;
+    await Future.wait(List.generate(workerCount, (_) => worker()));
+    return {'items': results.cast<Map<String, dynamic>>()};
+  }
+
+  Future<Map<String, dynamic>> _readOne(
+    String siteId,
+    String roomId, {
+    required bool withProfile,
+  }) async {
     final site = sites[siteId];
     if (site == null) throw const FormatException('未知直播平台');
     if (!RegExp(r'^[A-Za-z0-9_-]{1,100}$').hasMatch(roomId)) {
       throw const FormatException('房间号格式无效');
     }
     final key = '$siteId:$roomId';
-    final withProfile = uri.queryParameters['profile'] == '1';
     final profile = _profiles[key];
     final metadata =
         profile != null &&

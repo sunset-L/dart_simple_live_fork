@@ -136,10 +136,14 @@ Future<void> handle(HttpRequest request) async {
         bytes.addAll(chunk);
       }
       final body = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+      if (request.uri.path == '/api/live-status/batch') {
+        await accounts.refresh();
+      }
       result = switch (request.uri.path) {
         '/api/library' => await library.write(body),
         '/api/preferences' => await preferences.write(body),
         '/api/accounts' => await accounts.handle(body),
+        '/api/live-status/batch' => await liveStatuses.readBatch(body['items']),
         '/api/webdav' => await webdav(body),
         '/api/device' => await device(body, accounts),
         _ => throw const FormatException('接口不存在'),

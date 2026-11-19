@@ -1,6 +1,7 @@
-import { get } from "../../services/apiClient";
+import { get, post } from "../../services/apiClient";
 import { safeImage } from "../../services/media";
 import { updateFollowAvatars } from "../../stores/libraryStorage";
+import type { Follow } from "../../types/library";
 
 export interface FollowRoomState {
   status: boolean;
@@ -8,6 +9,12 @@ export interface FollowRoomState {
   cover?: string;
   title?: string;
   online?: number;
+}
+
+export interface FollowRoomBatchResult extends Omit<FollowRoomState, "status"> {
+  id: string;
+  status: boolean | null;
+  error?: string;
 }
 
 const pendingCards = new Map<string, Promise<FollowRoomState>>();
@@ -57,6 +64,47 @@ export function readFollowRoom(
     })}`,
     signal,
   );
+}
+
+export function readFollowRooms(
+  follows: Pick<Follow, "id" | "siteId" | "roomId">[],
+  signal?: AbortSignal,
+): Promise<FollowRoomBatchResult[]> {
+  return (async () => {
+    const results: FollowRoomBatchResult[] = [];
+    for (let index = 0; index < follows.length; index += 100) {
+      const batch = follows.slice(index, index + 100);
+      try {
+        const response = await post<{ items: FollowRoomBatchResult[] }>(
+          "live-status/batch",
+          { items: batch },
+          signal,
+        );
+        const byId = new Map(response.items.map((item) => [item.id, item]));
+        results.push(
+          ...batch.map(
+            (item) =>
+              byId.get(item.id) ?? {
+                id: item.id,
+                status: null,
+                error: "开播状态查询失败",
+              },
+          ),
+        );
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        results.push(
+          ...batch.map((item) => ({
+            id: item.id,
+            status: null,
+            error:
+              error instanceof Error ? error.message : "开播状态查询失败",
+          })),
+        );
+      }
+    }
+    return results;
+  })();
 }
 
 export async function hydrateFollowAvatar(siteId: string, roomId: string) {

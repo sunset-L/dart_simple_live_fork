@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { updateFollowAvatars } from "../../stores/libraryStorage";
-import { needsFollowAvatar, readFollowRoom, type FollowRoomState } from "./profile";
+import {
+  needsFollowAvatar,
+  readFollowRooms,
+  type FollowRoomBatchResult,
+  type FollowRoomState,
+} from "./profile";
 import type { Follow } from "../../types/library";
 
 export interface FollowStatus extends Omit<FollowRoomState, "status"> {
@@ -58,43 +63,30 @@ export function useFollowStatus(
       );
       statusesRef.current = retained;
       setStatuses(retained);
-      let index = 0;
       let failed = 0;
       const avatars: { id: string; face: string }[] = [];
-      async function worker() {
-        while (index < items.length && !controller.signal.aborted) {
-          const item = items[index++];
-          let result: FollowStatus;
-          try {
-            const value = await readFollowRoom(
-              item.siteId,
-              item.roomId,
-              true,
-              controller.signal,
-            );
-            if (typeof value.status !== "boolean")
-              throw new Error("开播状态数据无效");
-            result = value;
-            if (value.face && !needsFollowAvatar(value.face))
-              avatars.push({ id: item.id, face: value.face });
-          } catch (error) {
-            failed++;
-            result = {
-              status: null,
-              error: error instanceof Error ? error.message : "开播状态查询失败",
-            };
-          }
-          if (!controller.signal.aborted) {
-            const next = { ...statusesRef.current, [item.id]: result };
-            statusesRef.current = next;
-            setStatuses(next);
-          }
-        }
+      let results: FollowRoomBatchResult[];
+      try {
+        results = await readFollowRooms(items, controller.signal);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        results = items.map((item) => ({
+          id: item.id,
+          status: null,
+          error:
+            error instanceof Error ? error.message : "开播状态查询失败",
+        }));
       }
-      await Promise.all(
-        Array.from({ length: Math.min(4, items.length) }, () => worker()),
-      );
       if (!controller.signal.aborted) {
+        const next = { ...statusesRef.current };
+        for (const result of results) {
+          if (result.status !== true && result.status !== false) failed++;
+          next[result.id] = result;
+          if (result.face && !needsFollowAvatar(result.face))
+            avatars.push({ id: result.id, face: result.face });
+        }
+        statusesRef.current = next;
+        setStatuses(next);
         if (avatars.length) void updateFollowAvatars(avatars);
         const complete = () => {
           if (controller.signal.aborted) return;

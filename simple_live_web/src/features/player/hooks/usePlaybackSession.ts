@@ -36,23 +36,26 @@ export function usePlaybackSession(site: string, roomId: string) {
       setSwitching(true);
       setError("");
       try {
-        const result = await playbackApi.sources(
+        const result = await playbackApi.session(
           site,
           roomId,
           next,
           controller.signal,
         );
         if (controller.signal.aborted) return;
+        const selectedQuality = result.quality;
+        if (!selectedQuality || !result.sources.length)
+          throw new Error("所选清晰度没有可用线路，请刷新后重新选择");
         const previous = target ?? line.current;
         const desired =
-          previous && result.items.find((item) => sameLine(item, previous));
+          previous && result.sources.find((item) => sameLine(item, previous));
         if (target && !desired)
           throw new Error("所选线路暂不可用，保留当前播放");
-        selected.current = next;
-        remember(result.items, next);
-        setQuality(next);
-        setSources(result.items);
-        setSource(desired ?? result.items[0] ?? null);
+        selected.current = selectedQuality;
+        remember(result.sources, selectedQuality);
+        setQuality(selectedQuality);
+        setSources(result.sources);
+        setSource(desired ?? result.sources[0] ?? null);
       } catch (reason) {
         if (!controller.signal.aborted)
           setError(reason instanceof Error ? reason.message : "取流失败");
@@ -71,9 +74,16 @@ export function usePlaybackSession(site: string, roomId: string) {
     setError("");
     void (async () => {
       try {
-        const room = await playbackApi.detail(site, roomId, controller.signal);
+        const result = await playbackApi.session(
+          site,
+          roomId,
+          selected.current,
+          controller.signal,
+        );
         if (controller.signal.aborted) return;
-        setDetail(room);
+        setDetail(result.detail);
+        setQualities(result.qualities);
+        const room = result.detail;
         if (!room.status) {
           setSource(null);
           setQualities([]);
@@ -81,37 +91,20 @@ export function usePlaybackSession(site: string, roomId: string) {
           setQuality(null);
           return;
         }
-        const result = await playbackApi.qualities(
-          site,
-          roomId,
-          controller.signal,
-        );
-        if (controller.signal.aborted) return;
-        setQualities(result.items);
-        const remembered = selected.current;
-        const next = remembered
-          ? result.items.find(
-              (item) =>
-                item.quality === remembered.quality &&
-                item.sort === remembered.sort,
-            )
-          : result.items[0];
+        const next = result.quality;
         if (!next) throw new Error("所选画质不可用，请手动选择清晰度");
-        const urls = await playbackApi.sources(
-          site,
-          roomId,
-          next,
-          controller.signal,
-        );
-        if (controller.signal.aborted) return;
+        if (!result.sources.length)
+          throw new Error("当前画质没有可用线路，请刷新后重试");
         selected.current = next;
-        remember(urls.items, next);
+        remember(result.sources, next);
         setQuality(next);
-        setSources(urls.items);
+        setSources(result.sources);
         const previous = line.current;
         setSource(
-          urls.items.find((item) => previous && sameLine(item, previous)) ??
-            urls.items[0] ??
+          result.sources.find(
+            (item) => previous && sameLine(item, previous),
+          ) ??
+            result.sources[0] ??
             null,
         );
       } catch (reason) {

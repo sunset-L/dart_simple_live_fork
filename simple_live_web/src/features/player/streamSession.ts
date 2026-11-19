@@ -23,10 +23,33 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
     idlePaused = false;
   let lastProgress = performance.now(),
     position = -1;
+  let healthTimer: ReturnType<typeof setTimeout> | undefined;
   const attempted = new Set<Source>();
+
+  function clearHealthTimer() {
+    clearTimeout(healthTimer);
+    healthTimer = undefined;
+  }
+
+  function scheduleHealthCheck() {
+    clearHealthTimer();
+    if (!active || faulting || idlePaused || video.paused) return;
+    const check = () => {
+      healthTimer = undefined;
+      if (!active || faulting || idlePaused || video.paused) return;
+      const remaining = 25000 - (performance.now() - lastProgress);
+      if (remaining <= 0) fail();
+      else healthTimer = setTimeout(check, remaining);
+    };
+    healthTimer = setTimeout(
+      check,
+      Math.max(1, 25000 - (performance.now() - lastProgress)),
+    );
+  }
 
   async function start(source: Source, useProxy: boolean) {
     const version = ++generation;
+    clearHealthTimer();
     faulting = true;
     dispose?.();
     dispose = undefined;
@@ -92,6 +115,7 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
   function fail() {
     if (stopped || !active || faulting || idlePaused) return;
     faulting = true;
+    clearHealthTimer();
     if (!proxy) {
       void start(active, true);
       return;
@@ -113,6 +137,8 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
     if (!active || faulting) return;
     firstFrame = settled = true;
     lastProgress = performance.now();
+    position = video.currentTime;
+    scheduleHealthCheck();
     events.confirmed(active);
     events.state(proxy ? "播放中 · 代理" : "播放中 · 直连");
   };
@@ -121,8 +147,15 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
   };
   const play = () => {
     idlePaused = false;
+    scheduleHealthCheck();
+  };
+  const progress = () => {
+    if (video.currentTime === position) return;
+    position = video.currentTime;
+    lastProgress = performance.now();
   };
   const pause = () => {
+    clearHealthTimer();
     if (settled) events.state("已暂停");
   };
   const waiting = () => {
@@ -130,19 +163,14 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
   };
   video.addEventListener("play", play);
   video.addEventListener("playing", playing);
+  video.addEventListener("timeupdate", progress);
   video.addEventListener("error", error);
   video.addEventListener("pause", pause);
   video.addEventListener("waiting", waiting);
-  const health = setInterval(() => {
-    if (!active || faulting || idlePaused || (settled && video.paused)) return;
-    if (video.currentTime !== position) {
-      position = video.currentTime;
-      lastProgress = performance.now();
-    } else if (performance.now() - lastProgress > 25000) fail();
-  }, 5000);
   return {
     pauseForIdle() {
       idlePaused = true;
+      clearHealthTimer();
       video.pause();
       events.state("已暂停");
     },
@@ -155,6 +183,7 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
     stop() {
       generation++;
       faulting = true;
+      clearHealthTimer();
       idlePaused = false;
       active = previous = null;
       dispose?.();
@@ -166,12 +195,13 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
     destroy() {
       stopped = true;
       generation++;
-      clearInterval(health);
+      clearHealthTimer();
       dispose?.();
       video.removeAttribute("src");
       video.load();
       video.removeEventListener("play", play);
       video.removeEventListener("playing", playing);
+      video.removeEventListener("timeupdate", progress);
       video.removeEventListener("error", error);
       video.removeEventListener("pause", pause);
       video.removeEventListener("waiting", waiting);

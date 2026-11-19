@@ -68,19 +68,7 @@ class PlaybackService {
 
   Future<Map<String, dynamic>> room(String siteId, String roomId) async {
     final value = await detail(siteId, roomId, fresh: true);
-    return {
-      'roomId': roomId,
-      'canonicalRoomId': value.roomId,
-      'siteId': siteId,
-      'title': value.title,
-      'cover': value.cover,
-      'userName': value.userName,
-      'userAvatar': value.userAvatar,
-      'online': value.online,
-      'status': value.status,
-      'url': value.url,
-      'notice': value.notice,
-    };
+    return roomJson(siteId, roomId, value);
   }
 
   Future<List<LivePlayQuality>> qualities(String id, String room) async {
@@ -131,6 +119,24 @@ class PlaybackService {
     return (url: value.url, headers: value.headers);
   }
 }
+
+Map<String, dynamic> roomJson(
+  String siteId,
+  String roomId,
+  LiveRoomDetail value,
+) => {
+  'roomId': roomId,
+  'canonicalRoomId': value.roomId,
+  'siteId': siteId,
+  'title': value.title,
+  'cover': value.cover,
+  'userName': value.userName,
+  'userAvatar': value.userAvatar,
+  'online': value.online,
+  'status': value.status,
+  'url': value.url,
+  'notice': value.notice,
+};
 
 Map<String, dynamic> qualityJson(int index, LivePlayQuality quality) => {
   'index': index,

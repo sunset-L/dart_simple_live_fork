@@ -80,7 +80,7 @@ html:has(.playback-page)::-webkit-scrollbar-thumb,
 .playback-main.is-sidebar-collapsed .playback-sidebar-edge {
   top: 0;
   right: 0;
-  width: 16px;
+  width: 40px;
 }
 .playback-sidebar-edge .playback-sidebar-toggle {
   right: 0;

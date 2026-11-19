@@ -19,17 +19,22 @@ class DanmakuService {
     LiveDanmaku? connection;
     var closed = false;
     final queue = <Map<String, dynamic>>[];
-    final flush = Timer.periodic(const Duration(milliseconds: 100), (_) {
-      if (!closed && socket.readyState == WebSocket.open && queue.isNotEmpty) {
-        socket.add(jsonEncode({'type': 'batch', 'events': List.of(queue)}));
-        queue.clear();
+    Timer? flush;
+    void flushQueue() {
+      flush = null;
+      if (closed || socket.readyState != WebSocket.open || queue.isEmpty) {
+        return;
       }
-    });
+      socket.add(jsonEncode({'type': 'batch', 'events': List.of(queue)}));
+      queue.clear();
+    }
+
     void send(Map<String, dynamic> value) {
       if (!closed &&
           socket.readyState == WebSocket.open &&
           queue.length < 100) {
         queue.add(value);
+        flush ??= Timer(const Duration(milliseconds: 100), flushQueue);
       }
     }
 
@@ -37,7 +42,7 @@ class DanmakuService {
       if (closed) return;
       closed = true;
       _active--;
-      flush.cancel();
+      flush?.cancel();
       queue.clear();
       try {
         await connection?.stop();

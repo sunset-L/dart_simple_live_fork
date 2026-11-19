@@ -29,6 +29,12 @@ export interface Source {
   format: PlaybackFormat;
   direct: boolean;
 }
+export interface PlaybackSession {
+  detail: RoomDetail;
+  qualities: Quality[];
+  quality: Quality | null;
+  sources: Source[];
+}
 export interface DanmakuMessage {
   id?: number;
   type: "chat" | "online" | "superChat" | "gift";
