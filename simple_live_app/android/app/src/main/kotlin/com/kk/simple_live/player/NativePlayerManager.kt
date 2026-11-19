@@ -569,8 +569,8 @@ class NativePlayerManager private constructor() {
      *  - "landscape" 明确指定初始横屏方向，之后仅在有效横向姿态稳定时翻向。
      *  - "portrait"  竖屏内容全屏时锁定竖屏，不响应左右横屏姿态。
      *  - "auto"      非全屏 / 退出播放器：恢复进入全屏前的方向策略。
-     *                先恢复实际窗口方向，再恢复策略，避免厂商小窗保留全屏横向尺寸。
-     *  - "restore"   只恢复并固定实际窗口方向，退出动画结束后再调用 auto。
+     *                先恢复竖屏播放页，再恢复策略，避免厂商小窗保留全屏横向尺寸。
+     *  - "restore"   恢复并固定竖屏播放页，退出动画结束后再调用 auto。
      */
     fun setScreenOrientation(mode: String?) {
         val act = activity ?: return
@@ -582,8 +582,11 @@ class NativePlayerManager private constructor() {
             clearOrientationRestore()
             if (requested == null) {
                 orientationBeforeFullscreen = act.requestedOrientation
-                windowOrientationBeforeFullscreen = windowOrientation(act)
-                windowRotationBeforeFullscreen = act.window.decorView.display?.rotation
+                windowOrientationBeforeFullscreen = Configuration.ORIENTATION_PORTRAIT
+                windowRotationBeforeFullscreen =
+                    if (windowOrientation(act) == Configuration.ORIENTATION_PORTRAIT) {
+                        act.window.decorView.display?.rotation
+                    } else null
             } else {
                 orientationBeforeFullscreen = requested
                 windowOrientationBeforeFullscreen = savedWindowOrientation
@@ -605,6 +608,12 @@ class NativePlayerManager private constructor() {
             return
         }
         stopLandscapeOrientationChanges()
+        // 系统横屏全屏没有请求过方向；点击退出时仍需回到唯一的竖屏页面布局。
+        if (mode == "restore" && windowOrientationBeforeFullscreen == null) {
+            orientationBeforeFullscreen = act.requestedOrientation
+            windowOrientationBeforeFullscreen = Configuration.ORIENTATION_PORTRAIT
+            windowRotationBeforeFullscreen = null
+        }
         val target = windowOrientationBeforeFullscreen ?: return
         val requestedTarget = orientationForWindow(target, windowRotationBeforeFullscreen)
         if (mode == "restore") {

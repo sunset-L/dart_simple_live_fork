@@ -438,9 +438,9 @@ class NativePlayerBridge {
   /// 不修改系统旋转动画，不在 Flutter 中重复旋转画面。
   /// - `landscape`：横屏内容全屏，允许稳定的左右横屏姿态切换
   /// - `portrait`：竖屏内容全屏用（PORTRAIT，锁定竖屏）
-  /// - `restore`：固定到进入前的窗口方向，供播放器完成退出动画
+  /// - `restore`：固定到竖屏播放页方向，供播放器完成退出动画
   /// - `auto`：退出全屏时恢复进入前的方向策略
-  /// 退出时先恢复原窗口方向，再恢复原方向策略，兼容系统应用小窗。
+  /// 退出时先恢复竖屏播放页，再恢复原方向策略，兼容系统应用小窗。
   Future<void> setScreenOrientation(String mode) async {
     try {
       await _method.invokeMethod("setScreenOrientation", mode);

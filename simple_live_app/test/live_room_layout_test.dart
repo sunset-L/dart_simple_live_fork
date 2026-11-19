@@ -5,7 +5,6 @@ import 'package:simple_live_app/modules/live_room/live_room_layout.dart';
 const _playerKey = ValueKey('player');
 const _sidebarKey = ValueKey('sidebar');
 const _portraitActionsKey = ValueKey('portrait-actions');
-const _landscapeActionsKey = ValueKey('landscape-actions');
 
 Widget _page({
   required bool fullScreen,
@@ -22,10 +21,6 @@ Widget _page({
         portraitActions: const SizedBox(
           key: _portraitActionsKey,
           height: 48,
-        ),
-        landscapeActions: const SizedBox(
-          key: _landscapeActionsKey,
-          height: 56,
         ),
       ),
     ),
@@ -106,37 +101,6 @@ void main() {
     }
     await tester.pumpWidget(const SizedBox.shrink());
     expect(disposed, 1);
-  });
-
-  testWidgets('半屏旋转保留聊天滚动位置并使用原来的 300 宽侧栏', (tester) async {
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    _setSize(tester, const Size(360, 800));
-    final scrollController = ScrollController();
-    addTearDown(scrollController.dispose);
-    const player = ColoredBox(key: _playerKey, color: Colors.black);
-    final sidebar = ListView.builder(
-      key: _sidebarKey,
-      controller: scrollController,
-      itemExtent: 40,
-      itemCount: 50,
-      itemBuilder: (_, i) => Text('消息 $i'),
-    );
-    await tester.pumpWidget(
-      _page(fullScreen: false, player: player, sidebar: sidebar),
-    );
-    scrollController.jumpTo(200);
-    await tester.pump();
-    _setSize(tester, const Size(800, 360));
-    await tester.pumpWidget(
-      _page(fullScreen: false, player: player, sidebar: sidebar),
-    );
-    await tester.pump();
-    expect(tester.getSize(find.byKey(_playerKey)).width, 500);
-    expect(tester.getSize(find.byKey(_sidebarKey)).width, 300);
-    expect(scrollController.offset, 200);
-    expect(find.byKey(_landscapeActionsKey), findsOneWidget);
-    expect(tester.takeException(), isNull);
   });
 
   testWidgets('首次自动全屏正常布局，隐藏的聊天区和操作栏不能获得焦点', (tester) async {
