@@ -121,6 +121,9 @@ Map<String, dynamic> _validatePlayer(Map<String, dynamic> value) {
     'weight': (1.0, 9.0),
     'duration': (1.0, 10.0),
     'area': (0.1, 1.0),
+    'topMargin': (0.0, 48.0),
+    'verticalGap': (0.0, 40.0),
+    'horizontalGap': (0.0, 100.0),
   };
   for (final entry in value.entries) {
     if (['enabled', 'fortune', 'antiOverlap'].contains(entry.key)) {

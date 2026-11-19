@@ -16,6 +16,9 @@ export const playerDefaults = {
   weight: 4,
   duration: 8,
   area: 0.8,
+  topMargin: 0,
+  verticalGap: 4,
+  horizontalGap: 16,
   fortune: false,
   antiOverlap: true,
 };
@@ -70,6 +73,9 @@ function legacyPreferences(): PreferencePatch {
           weight: [1, 9],
           duration: [1, 10],
           area: [0.1, 1],
+          topMargin: [0, 48],
+          verticalGap: [0, 40],
+          horizontalGap: [0, 100],
         } as const;
         for (const field of Object.keys(limits) as (keyof typeof limits)[]) {
           const [min, max] = limits[field];

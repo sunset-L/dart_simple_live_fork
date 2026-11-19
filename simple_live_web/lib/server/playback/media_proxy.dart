@@ -23,7 +23,17 @@ class MediaProxy {
               ..connectionFactory = (uri, proxyHost, proxyPort) async {
                 // Connect to the validated address, avoiding a second DNS resolution.
                 final addresses = await _publicTarget(uri);
-                return Socket.startConnect(addresses.first, uri.port);
+                final connection = await Socket.startConnect(
+                  addresses.first,
+                  uri.port,
+                );
+                if (uri.scheme != 'https') return connection;
+                return ConnectionTask.fromSocket<Socket>(
+                  connection.socket.then<Socket>(
+                    (socket) => SecureSocket.secure(socket, host: uri.host),
+                  ),
+                  connection.cancel,
+                );
               };
           },
         );

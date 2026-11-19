@@ -205,6 +205,12 @@ export function PlayerSurface(props: Props) {
     const plugin = renderer.current,
       settings = props.settings;
     if (!plugin) return;
+    const height = player.current?.template.$danmuku.clientHeight ?? 400;
+    const bottomMargin = height * (1 - settings.area);
+    const topMargin = Math.min(
+      settings.topMargin,
+      Math.max(0, height - bottomMargin - settings.size * 1.2),
+    );
     const configure = () =>
       plugin.config({
         danmuku: [],
@@ -213,12 +219,20 @@ export function PlayerSurface(props: Props) {
         fontSize: settings.size,
         speed: settings.duration,
         margin: [
-          0,
-          (player.current?.template.$danmuku.clientHeight ?? 400) *
-            (1 - settings.area),
+          topMargin,
+          bottomMargin,
         ],
         antiOverlap: settings.antiOverlap,
       });
+    const danmakuLayer = player.current?.template.$danmuku;
+    danmakuLayer?.style.setProperty(
+      "--danmaku-vertical-gap",
+      `${settings.verticalGap / 2}px`,
+    );
+    danmakuLayer?.style.setProperty(
+      "--danmaku-horizontal-gap",
+      `${settings.horizontalGap / 2}px`,
+    );
     configure();
     const observer = new ResizeObserver(() => {
       configure();

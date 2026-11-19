@@ -1,11 +1,35 @@
 import type { PlayerSettings as Settings } from "../../../stores/playerSettings";
 import { Slider, Switch } from "antd";
 export const danmakuFields = [
-  ["opacity", "不透明度", 0.1, 1, 0.05],
-  ["size", "字号", 8, 48, 1],
-  ["weight", "字体粗细", 1, 9, 1],
-  ["duration", "滚动时长（秒）", 1, 10, 1],
-  ["area", "显示区域", 0.1, 1, 0.1],
+  {
+    key: "opacity",
+    label: "不透明度",
+    min: 0.1,
+    max: 1,
+    step: 0.05,
+    unit: "%",
+  },
+  { key: "size", label: "字号", min: 8, max: 48, step: 1, unit: "px" },
+  { key: "weight", label: "字体粗细", min: 1, max: 9, step: 1, unit: "" },
+  { key: "duration", label: "滚动时长", min: 1, max: 10, step: 1, unit: "秒" },
+  { key: "area", label: "显示区域", min: 0.1, max: 1, step: 0.1, unit: "%" },
+  { key: "topMargin", label: "顶部间距", min: 0, max: 48, step: 4, unit: "px" },
+  {
+    key: "verticalGap",
+    label: "弹幕纵向间距",
+    min: 0,
+    max: 40,
+    step: 2,
+    unit: "px",
+  },
+  {
+    key: "horizontalGap",
+    label: "弹幕横向间距",
+    min: 0,
+    max: 100,
+    step: 4,
+    unit: "px",
+  },
 ] as const;
 export function PlayerSettings({
   value,
@@ -41,13 +65,13 @@ export function PlayerSettings({
           onChange={(fortune) => onChange({ fortune })}
         />
       </div>
-      {danmakuFields.map(([key, label, min, max, step]) => (
+      {danmakuFields.map(({ key, label, min, max, step, unit }) => (
         <div className="danmaku-slider-row" key={key}>
           <span>
             {label} ·{" "}
-            {key === "area" || key === "opacity"
+            {unit === "%"
               ? `${Math.round(value[key] * 100)}%`
-              : value[key]}
+              : `${value[key]}${unit}`}
           </span>
           <Slider
             aria-label={label}
@@ -57,9 +81,9 @@ export function PlayerSettings({
             value={value[key]}
             tooltip={{
               formatter: (next) =>
-                key === "area" || key === "opacity"
+                unit === "%"
                   ? `${Math.round((next ?? 0) * 100)}%`
-                  : next,
+                  : `${next ?? value[key]}${unit}`,
               getPopupContainer: (trigger) =>
                 trigger.closest<HTMLElement>(".art-video-player") ??
                 document.body,

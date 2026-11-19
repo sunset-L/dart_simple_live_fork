@@ -135,6 +135,11 @@ html:has(.playback-page)::-webkit-scrollbar-thumb,
   pointer-events: none;
   z-index: 30;
 }
+.stage-danmaku > div {
+  box-sizing: content-box;
+  padding-block: var(--danmaku-vertical-gap, 0px);
+  padding-inline: var(--danmaku-horizontal-gap, 0px);
+}
 .art-video-player.art-fullscreen-web {
   --art-control-height: 46px;
   --art-control-icon-scale: 1.1;
