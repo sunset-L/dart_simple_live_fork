@@ -343,8 +343,22 @@ export function App() {
             tag={selectedTag}
             setTag={setTag}
             onFollow={toggleFollow}
+            onRemoveHistory={(id) =>
+              change(() =>
+                commit({
+                  ...library.current,
+                  histories: library.current.histories.filter(
+                    (item) => item.id !== id,
+                  ),
+                }),
+              )
+            }
+            onClearHistory={() =>
+              change(async () => {
+                await commit({ ...library.current, histories: [] });
+              })
+            }
             onAdd={() => setAddFollow(true)}
-            onHistory={() => go("history")}
             notify={notify}
             onRemoveTag={(name) =>
               change(async () => {

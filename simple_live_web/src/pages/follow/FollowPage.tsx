@@ -1,7 +1,11 @@
-import { History as HistoryIcon, Plus, RefreshCw, X } from "lucide-react";
+import { Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { Button, Popconfirm, Segmented, Tag, Tooltip } from "antd";
 import { Empty } from "../../features/catalog/Catalog";
-import { type Library, type Follow } from "../../services/libraryData";
+import {
+  type Follow,
+  type History,
+  type Library,
+} from "../../services/libraryData";
 import { useFollowStatus } from "../../features/follow/useFollowStatus";
 import { LiveCard } from "../../components/LiveCard";
 
@@ -13,10 +17,11 @@ export function FollowPage({
   tag,
   setTag,
   onFollow,
+  onRemoveHistory,
+  onClearHistory,
   onRemoveTag,
   onEdit,
   onAdd,
-  onHistory,
   notify,
 }: {
   data: Library;
@@ -25,46 +30,59 @@ export function FollowPage({
   setFilter: (value: string) => void;
   tag: string;
   setTag: (value: string) => void;
-  onFollow: (item: Follow) => void;
+  onFollow: (item: Follow | History) => void;
+  onRemoveHistory: (id: string) => void;
+  onClearHistory: () => void;
   onRemoveTag: (name: string) => void;
   onEdit: (item: Follow) => void;
   onAdd: () => void;
-  onHistory: () => void;
   notify: (message: string) => void;
 }) {
   const customTags = data.tags.filter((item) => item.tag !== "全部");
   const tags = [...new Set(["全部", ...customTags.map((item) => item.tag)])];
-  const { statuses, loading, refresh } = useFollowStatus(data.follows);
+  const followStatus = useFollowStatus(data.follows, filter !== "history");
+  const historyStatus = useFollowStatus(data.histories, filter === "history");
+  const { loading, refresh } =
+    filter === "history" ? historyStatus : followStatus;
   const liveCount = following.filter(
-    (item) => statuses[item.id]?.status === true,
+    (item) => followStatus.statuses[item.id]?.status === true,
   ).length;
   const visible = following.filter((item) =>
     filter === "live"
-      ? statuses[item.id]?.status === true
+      ? followStatus.statuses[item.id]?.status === true
       : filter === "offline"
-        ? statuses[item.id]?.status === false
+        ? followStatus.statuses[item.id]?.status === false
         : true,
   );
   if (filter === "all")
     visible.sort(
       (left, right) =>
-        Number(statuses[right.id]?.status === true) -
-        Number(statuses[left.id]?.status === true),
+        Number(followStatus.statuses[right.id]?.status === true) -
+        Number(followStatus.statuses[left.id]?.status === true),
     );
+  const history = [...data.histories].sort(
+    (left, right) => Date.parse(right.updateTime) - Date.parse(left.updateTime),
+  );
+  const isHistory = filter === "history";
+  const refreshLabel = isHistory ? "刷新历史开播状态" : "刷新开播状态";
   return (
     <div className="follow-content">
       <div className="content-heading">
         <div>
-          <h1>我的关注</h1>
+          <h1>{isHistory ? "历史记录" : "我的关注"}</h1>
           <span className="muted">
-            {following.length} 位主播 · {liveCount} 位直播中
+            {isHistory
+              ? `${data.histories.length} 条记录`
+              : `${following.length} 位主播 · ${liveCount} 位直播中`}
           </span>
         </div>
         <div className="actions compact">
-          <Tooltip title="刷新开播状态">
+          <Tooltip title={refreshLabel}>
             <Button
-              aria-label="刷新开播状态"
-              disabled={loading || !data.follows.length}
+              aria-label={refreshLabel}
+              disabled={
+                loading || !(isHistory ? history.length : data.follows.length)
+              }
               icon={<RefreshCw size={18} className={loading ? "spin" : ""} />}
               onClick={() =>
                 refresh(({ total, failed }) =>
@@ -79,30 +97,34 @@ export function FollowPage({
               }
             />
           </Tooltip>
-          <Tooltip title="历史记录">
-            <Button
-              aria-label="历史记录"
-              icon={<HistoryIcon size={18} />}
-              onClick={onHistory}
-            />
-          </Tooltip>
-          <Button type="primary" icon={<Plus size={17} />} onClick={onAdd}>
-            添加关注
-          </Button>
+          {isHistory ? (
+            history.length > 0 && (
+              <Popconfirm title="清空全部历史记录？" onConfirm={onClearHistory}>
+                <Button danger icon={<Trash2 size={17} />}>
+                  清空
+                </Button>
+              </Popconfirm>
+            )
+          ) : (
+            <Button type="primary" icon={<Plus size={17} />} onClick={onAdd}>
+              添加关注
+            </Button>
+          )}
         </div>
       </div>
       <div className="filter-bar">
         <Segmented
-          aria-label="开播状态筛选"
+          aria-label="关注列表筛选"
           value={filter}
           onChange={setFilter}
           options={[
             { value: "all", label: "全部" },
             { value: "live", label: "直播中" },
             { value: "offline", label: "未开播" },
+            { value: "history", label: "历史记录" },
           ]}
         />
-        {customTags.length > 0 && (
+        {!isHistory && customTags.length > 0 && (
           <div className="tag-list">
             {tags.map((item) => (
               <Tag.CheckableTag
@@ -116,10 +138,37 @@ export function FollowPage({
           </div>
         )}
       </div>
-      {visible.length ? (
+      {isHistory ? (
+        history.length ? (
+          <div className="live-card-grid">
+            {history.map((item: History) => {
+              const followed = data.follows.some((user) => user.id === item.id);
+              const state = historyStatus.statuses[item.id];
+              return (
+                <LiveCard
+                  key={item.id}
+                  {...item}
+                  face={state?.face || item.face}
+                  cover={state?.cover}
+                  title={state?.title}
+                  online={state?.online}
+                  status={state?.status}
+                  statusError={state?.error}
+                  time={item.updateTime}
+                  followed={followed}
+                  onFollow={() => onFollow(item)}
+                  onRemove={() => onRemoveHistory(item.id)}
+                />
+              );
+            })}
+          </div>
+        ) : (
+          <Empty title="暂无历史记录" />
+        )
+      ) : visible.length ? (
         <div className="live-card-grid">
           {visible.map((item) => {
-            const state = statuses[item.id];
+            const state = followStatus.statuses[item.id];
             return (
               <LiveCard
                 key={item.id}
@@ -146,7 +195,7 @@ export function FollowPage({
           title={data.follows.length ? "没有符合条件的关注" : "暂无关注"}
         />
       )}
-      {customTags.length > 0 && (
+      {!isHistory && customTags.length > 0 && (
         <div className="tag-manage">
           <span>标签</span>
           {customTags.map((item) => (
