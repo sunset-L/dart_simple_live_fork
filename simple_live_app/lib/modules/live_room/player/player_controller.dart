@@ -488,6 +488,9 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     _fullScreenLandscape = isLandscapeVideo;
     fullScreenState.value = true;
     try {
+      // 先提交切屏状态，让系统旋转截图和下一次布局使用同一个全屏状态。
+      await WidgetsBinding.instance.endOfFrame;
+      if (_systemDisposed) return;
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
           overlays: []);
       if (_systemDisposed) return;
@@ -563,10 +566,16 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     // 退出全屏时参数面板不可见，必须顺手停掉采集，
     // 否则它会以「已打开」的状态继续在后台轮询。
     closeMetricsPanel();
-    // 先固定到进入前的窗口方向，缩回动画完成后再释放方向策略。
-    nativePlayer.setScreenOrientation("restore");
     fullScreenState.value = false;
+    unawaited(_restoreInlineWindow());
     _syncVideoSize();
+  }
+
+  Future<void> _restoreInlineWindow() async {
+    // 先让布局进入等待竖屏的状态，再允许原生窗口 resize。
+    await WidgetsBinding.instance.endOfFrame;
+    if (_systemDisposed || fullScreenState.value) return;
+    await nativePlayer.setScreenOrientation("restore");
   }
 
   /// 原生明确指定横屏方向，只在真实横向姿态稳定后切换左右横屏。

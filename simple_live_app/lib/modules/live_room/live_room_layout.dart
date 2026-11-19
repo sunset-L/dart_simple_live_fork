@@ -99,18 +99,22 @@ class _LiveRoomLayoutState extends State<LiveRoomLayout>
   @override
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
-    if (_waitingForInlineOrientation &&
-        (_inlineMedia == null ||
-            media.orientation == _inlineMedia!.orientation)) {
-      _waitingForInlineOrientation = false;
-      _orientationTimeout?.cancel();
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && !widget.fullScreen) _transition.reverse();
-      });
-    }
     return LayoutBuilder(
       builder: (context, constraints) {
         final size = constraints.biggest;
+        // 方向交接以实际约束为准；普通布局保留窗口方向，不能把键盘缩高当成横屏。
+        final landscape = size.width > size.height;
+        if (_waitingForInlineOrientation &&
+            (_inlineMedia == null ||
+                landscape ==
+                    (_inlineMedia!.orientation == Orientation.landscape))) {
+          _waitingForInlineOrientation = false;
+          _orientationTimeout?.cancel();
+          _inlineSize = size;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && !widget.fullScreen) _transition.reverse();
+          });
+        }
         if (!widget.fullScreen &&
             !_waitingForInlineOrientation &&
             _transition.isDismissed) {
@@ -176,9 +180,7 @@ class _LiveRoomLayoutState extends State<LiveRoomLayout>
                     progress: progress,
                     rotatesWindow: _rotatesWindow,
                     fullScreen: widget.fullScreen,
-                    targetOrientationReached:
-                        (media.orientation == Orientation.landscape) ==
-                            _landscapeFullScreen,
+                    targetOrientationReached: landscape == _landscapeFullScreen,
                     waitingForOrientation: _waitingForInlineOrientation,
                   ),
                   children: [

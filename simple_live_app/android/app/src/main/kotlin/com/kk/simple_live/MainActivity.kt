@@ -2,10 +2,14 @@ package com.kk.simple_live
 
 import com.kk.simple_live.player.NativePlayerManager
 import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.RenderMode
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+
+    // 整页参与窗口合成，避免独立 SurfaceView 在旋转时缩放不同尺寸的旧帧。
+    override fun getRenderMode(): RenderMode = RenderMode.texture
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
