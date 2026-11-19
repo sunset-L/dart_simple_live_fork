@@ -340,6 +340,10 @@ nav button.active {
   gap: 7px;
   overflow: auto;
   padding-bottom: 3px;
+  position: sticky;
+  top: 72px;
+  background: var(--bg);
+  z-index: 10;
 }
 .platform-tabs button {
   display: flex;
@@ -409,7 +413,7 @@ nav button.active {
 }
 .live-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr));
   gap: 24px 18px;
   align-items: start;
 }
