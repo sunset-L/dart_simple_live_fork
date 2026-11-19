@@ -255,6 +255,17 @@ export function PlayerControls({
     };
   }, [openMenu, player]);
   useEffect(() => {
+    if (player.isDestroy) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!player.contextmenu.show) return;
+      const path = event.composedPath();
+      if (!path.includes(player.template.$contextmenu))
+        player.contextmenu.show = false;
+    };
+    document.addEventListener("pointerdown", closeOutside, true);
+    return () => document.removeEventListener("pointerdown", closeOutside, true);
+  }, [player]);
+  useEffect(() => {
     if (switching || refreshing) setOpenMenu(null);
   }, [switching, refreshing]);
   if (player.isDestroy) return null;

@@ -143,7 +143,10 @@ Future<void> handle(HttpRequest request) async {
         '/api/library' => await library.write(body),
         '/api/preferences' => await preferences.write(body),
         '/api/accounts' => await accounts.handle(body),
-        '/api/live-status/batch' => await liveStatuses.readBatch(body['items']),
+        '/api/live-status/batch' => await liveStatuses.readBatch(
+          body['items'],
+          fresh: body['fresh'] == true,
+        ),
         '/api/webdav' => await webdav(body),
         '/api/device' => await device(body, accounts),
         _ => throw const FormatException('接口不存在'),

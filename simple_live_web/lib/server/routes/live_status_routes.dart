@@ -19,7 +19,10 @@ class LiveStatusRoutes {
     );
   }
 
-  Future<Map<String, dynamic>> readBatch(Object? value) async {
+  Future<Map<String, dynamic>> readBatch(
+    Object? value, {
+    bool fresh = false,
+  }) async {
     if (value is! List || value.length > 500) {
       throw const FormatException('主播状态批量请求无效或过多');
     }
@@ -54,6 +57,7 @@ class LiveStatusRoutes {
             item.siteId,
             item.roomId,
             withProfile: true,
+            fresh: fresh,
           );
           results[index] = {'id': item.id, ...result};
         } catch (_) {
@@ -71,6 +75,7 @@ class LiveStatusRoutes {
     String siteId,
     String roomId, {
     required bool withProfile,
+    bool fresh = false,
   }) async {
     final site = sites[siteId];
     if (site == null) throw const FormatException('未知直播平台');
@@ -85,7 +90,8 @@ class LiveStatusRoutes {
         ? profile.data
         : null;
     final cached = _cache[key];
-    if (cached != null &&
+    if (!fresh &&
+        cached != null &&
         DateTime.now().difference(cached.time).inSeconds < 30 &&
         (!withProfile || metadata != null)) {
       return {

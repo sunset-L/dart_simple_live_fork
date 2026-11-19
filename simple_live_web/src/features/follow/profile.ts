@@ -69,6 +69,7 @@ export function readFollowRoom(
 export function readFollowRooms(
   follows: Pick<Follow, "id" | "siteId" | "roomId">[],
   signal?: AbortSignal,
+  fresh = false,
 ): Promise<FollowRoomBatchResult[]> {
   return (async () => {
     const results: FollowRoomBatchResult[] = [];
@@ -77,7 +78,7 @@ export function readFollowRooms(
       try {
         const response = await post<{ items: FollowRoomBatchResult[] }>(
           "live-status/batch",
-          { items: batch },
+          { items: batch, fresh },
           signal,
         );
         const byId = new Map(response.items.map((item) => [item.id, item]));

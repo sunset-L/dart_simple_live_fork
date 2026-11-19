@@ -83,7 +83,12 @@ export function PlaybackPage({
   const [panel, setPanel] = useState("chat"),
     [keyword, setKeyword] = useState("");
   const showFollows = !sidebarCollapsed && panel === "follows";
-  const { statuses: followStatuses } = useFollowStatus(data.follows, showFollows);
+  const { statuses: followStatuses } = useFollowStatus(
+    data.follows,
+    showFollows,
+    false,
+    true,
+  );
   const sidebarFollows = useMemo(
     () =>
       showFollows

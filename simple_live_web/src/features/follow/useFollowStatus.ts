@@ -22,6 +22,7 @@ export function useFollowStatus(
   follows: Pick<Follow, "id" | "siteId" | "roomId">[],
   enabled = true,
   onlyMissing = false,
+  fresh = false,
 ) {
   const [statuses, setStatuses] = useState<Record<string, FollowStatus>>({});
   const statusesRef = useRef(statuses);
@@ -67,7 +68,7 @@ export function useFollowStatus(
       const avatars: { id: string; face: string }[] = [];
       let results: FollowRoomBatchResult[];
       try {
-        results = await readFollowRooms(items, controller.signal);
+        results = await readFollowRooms(items, controller.signal, fresh);
       } catch (error) {
         if (controller.signal.aborted) return;
         results = items.map((item) => ({
@@ -107,7 +108,7 @@ export function useFollowStatus(
       controller.abort();
       clearTimeout(animationTimer);
     };
-  }, [rooms, enabled, version, onlyMissing]);
+  }, [rooms, enabled, version, onlyMissing, fresh]);
   return {
     statuses,
     loading,
