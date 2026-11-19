@@ -1,5 +1,4 @@
-// Temporary three-minute interval for user acceptance; restore to ten minutes afterward.
-const idleDelay = 3 * 60 * 1000;
+const idleDelay = 10 * 60 * 1000;
 const warningDuration = 10 * 1000;
 
 export function watchIdlePlayback(
