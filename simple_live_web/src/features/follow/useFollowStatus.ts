@@ -16,10 +16,13 @@ interface RefreshResult {
 export function useFollowStatus(
   follows: Pick<Follow, "id" | "siteId" | "roomId">[],
   enabled = true,
+  onlyMissing = false,
 ) {
   const [statuses, setStatuses] = useState<Record<string, FollowStatus>>({});
+  const statusesRef = useRef(statuses);
   const [loading, setLoading] = useState(false);
   const [version, setVersion] = useState(0);
+  const lastVersion = useRef(version);
   const manualRefresh = useRef<((result: RefreshResult) => void) | undefined>(
     undefined,
   );
@@ -30,7 +33,16 @@ export function useFollowStatus(
     if (!enabled) return;
     let onComplete = manualRefresh.current;
     manualRefresh.current = undefined;
-    const items = JSON.parse(rooms) as Pick<Follow, "id" | "siteId" | "roomId">[];
+    const currentItems = JSON.parse(rooms) as Pick<
+      Follow,
+      "id" | "siteId" | "roomId"
+    >[];
+    const isManualRefresh = version !== lastVersion.current;
+    lastVersion.current = version;
+    const items =
+      onlyMissing && !isManualRefresh
+        ? currentItems.filter((item) => !statusesRef.current[item.id])
+        : currentItems;
     const controller = new AbortController();
     let animationTimer: ReturnType<typeof setTimeout> | undefined;
     let running = false;
@@ -39,13 +51,13 @@ export function useFollowStatus(
       running = true;
       const started = performance.now();
       setLoading(items.length > 0);
-      setStatuses((previous) =>
-        Object.fromEntries(
-          items
-            .filter((item) => previous[item.id])
-            .map((item) => [item.id, previous[item.id]]),
-        ),
+      const retained = Object.fromEntries(
+        currentItems
+          .filter((item) => statusesRef.current[item.id])
+          .map((item) => [item.id, statusesRef.current[item.id]]),
       );
+      statusesRef.current = retained;
+      setStatuses(retained);
       let index = 0;
       let failed = 0;
       const avatars: { id: string; face: string }[] = [];
@@ -72,8 +84,11 @@ export function useFollowStatus(
               error: error instanceof Error ? error.message : "开播状态查询失败",
             };
           }
-          if (!controller.signal.aborted)
-            setStatuses((previous) => ({ ...previous, [item.id]: result }));
+          if (!controller.signal.aborted) {
+            const next = { ...statusesRef.current, [item.id]: result };
+            statusesRef.current = next;
+            setStatuses(next);
+          }
         }
       }
       await Promise.all(
@@ -100,7 +115,7 @@ export function useFollowStatus(
       controller.abort();
       clearTimeout(animationTimer);
     };
-  }, [rooms, enabled, version]);
+  }, [rooms, enabled, version, onlyMissing]);
   return {
     statuses,
     loading,

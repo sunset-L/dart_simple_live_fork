@@ -11,6 +11,10 @@ import {
 } from "../../services/libraryData";
 import { LiveCard } from "../../components/LiveCard";
 import { Picture } from "../../components/Picture";
+import {
+  scrollLoadTriggerStyle,
+  useScrollLoadMore,
+} from "../../hooks/useScrollLoadMore";
 export { Picture } from "../../components/Picture";
 export function Empty({
   title,
@@ -220,6 +224,11 @@ function Rooms({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
+  const loadMoreRef = useScrollLoadMore({
+    hasMore: hasMore && !error,
+    loading,
+    onLoad: () => setPage((value) => value + 1),
+  });
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
@@ -280,17 +289,18 @@ function Rooms({
       )}
       {!error && !rooms.length && <Empty title="没有找到直播间" />}
       {hasMore && !error && (
-        <div className="pagination">
-          <Button
-            disabled={loading}
-            loading={loading}
-            onClick={() => {
-              setLoading(true);
-              setPage((value) => value + 1);
-            }}
-          >
-            {loading ? "正在加载" : "加载更多"}
-          </Button>
+        <div
+          ref={loadMoreRef}
+          className="pagination"
+          style={scrollLoadTriggerStyle}
+          aria-live="polite"
+        >
+          {loading && (
+            <>
+              <Spin size="small" />
+              <span>正在加载</span>
+            </>
+          )}
         </div>
       )}
     </>

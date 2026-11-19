@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { Button, Popconfirm, Segmented, Tag, Tooltip } from "antd";
 import { Empty } from "../../features/catalog/Catalog";
@@ -8,6 +9,10 @@ import {
 } from "../../services/libraryData";
 import { useFollowStatus } from "../../features/follow/useFollowStatus";
 import { LiveCard } from "../../components/LiveCard";
+import {
+  scrollLoadTriggerStyle,
+  useScrollLoadMore,
+} from "../../hooks/useScrollLoadMore";
 
 export function FollowPage({
   data,
@@ -40,8 +45,18 @@ export function FollowPage({
 }) {
   const customTags = data.tags.filter((item) => item.tag !== "全部");
   const tags = [...new Set(["全部", ...customTags.map((item) => item.tag)])];
+  const history = [...data.histories].sort(
+    (left, right) => Date.parse(right.updateTime) - Date.parse(left.updateTime),
+  );
+  const [historyVisibleCount, setHistoryVisibleCount] = useState(20);
+  useEffect(() => setHistoryVisibleCount(20), [data.histories.length]);
+  const visibleHistory = history.slice(0, historyVisibleCount);
   const followStatus = useFollowStatus(data.follows, filter !== "history");
-  const historyStatus = useFollowStatus(data.histories, filter === "history");
+  const historyStatus = useFollowStatus(
+    visibleHistory,
+    filter === "history",
+    true,
+  );
   const { loading, refresh } =
     filter === "history" ? historyStatus : followStatus;
   const liveCount = following.filter(
@@ -60,10 +75,15 @@ export function FollowPage({
         Number(followStatus.statuses[right.id]?.status === true) -
         Number(followStatus.statuses[left.id]?.status === true),
     );
-  const history = [...data.histories].sort(
-    (left, right) => Date.parse(right.updateTime) - Date.parse(left.updateTime),
-  );
   const isHistory = filter === "history";
+  const historyLoadMoreRef = useScrollLoadMore({
+    hasMore: isHistory && historyVisibleCount < history.length,
+    loading: historyStatus.loading,
+    onLoad: () =>
+      setHistoryVisibleCount((value) =>
+        Math.min(value + 20, history.length),
+      ),
+  });
   const refreshLabel = isHistory ? "刷新历史开播状态" : "刷新开播状态";
   return (
     <div className="follow-content">
@@ -141,7 +161,7 @@ export function FollowPage({
       {isHistory ? (
         history.length ? (
           <div className="live-card-grid">
-            {history.map((item: History) => {
+            {visibleHistory.map((item: History) => {
               const followed = data.follows.some((user) => user.id === item.id);
               const state = historyStatus.statuses[item.id];
               return (
@@ -194,6 +214,16 @@ export function FollowPage({
         <Empty
           title={data.follows.length ? "没有符合条件的关注" : "暂无关注"}
         />
+      )}
+      {isHistory && historyVisibleCount < history.length && (
+        <div
+          ref={historyLoadMoreRef}
+          className="pagination"
+          style={scrollLoadTriggerStyle}
+          aria-live="polite"
+        >
+          {historyStatus.loading && <span>正在加载</span>}
+        </div>
       )}
       {!isHistory && customTags.length > 0 && (
         <div className="tag-manage">
