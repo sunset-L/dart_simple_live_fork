@@ -134,14 +134,29 @@ html:has(.playback-page)::-webkit-scrollbar-thumb,
   z-index: 80;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.8);
+  gap: 9px;
+  padding: 12px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-left: 4px solid #faad14;
+  border-radius: 8px;
+  background: rgba(18, 21, 27, 0.94);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.42);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   color: #fff;
-  font-size: 13px;
+  font-size: 15px;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
+}
+.player-idle-countdown svg,
+.player-idle-countdown strong {
+  color: #faad14;
+}
+.player-idle-countdown strong {
+  min-width: 2ch;
+  font-size: 21px;
+  line-height: 1;
+  text-align: right;
 }
 .stage-danmaku {
   position: absolute;

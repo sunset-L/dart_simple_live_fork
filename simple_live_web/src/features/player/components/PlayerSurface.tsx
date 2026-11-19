@@ -15,6 +15,20 @@ import { PlayerControls } from "./PlayerControls";
 
 Artplayer.FULLSCREEN_WEB_IN_BODY = false;
 
+type DanmakuQueueState = "wait" | "ready" | "emit" | "stop";
+
+interface DanmakuQueueItem {
+  $state: DanmakuQueueState;
+  $lastStartTime: number;
+  $restTime: number;
+  $ref: HTMLElement | null;
+}
+
+interface ManagedDanmakuRenderer extends DanmakuRenderer {
+  queue?: DanmakuQueueItem[];
+  states?: Partial<Record<DanmakuQueueState, DanmakuQueueItem[]>>;
+}
+
 interface Props {
   danmakuContainer: RefObject<HTMLDivElement | null>;
   source: Source | null;
@@ -46,7 +60,7 @@ export function PlayerSurface(props: Props) {
   const load = useRef<(source: Source) => void>(() => {});
   const stop = useRef<() => void>(() => {});
   const seen = useRef(0);
-  const emitted = useRef(0);
+  const nextDanmakuCompaction = useRef(600);
   const { token } = theme.useToken();
   useEffect(() => {
     if (!host.current) return;
@@ -139,15 +153,12 @@ export function PlayerSurface(props: Props) {
       true,
     );
     renderer.current = art.plugins.artplayerPluginDanmuku as DanmakuRenderer;
+    nextDanmakuCompaction.current = 600;
     const session = createStreamSession(art.video, {
       sources: () => latest.current.sources,
       state: (text) => latest.current.onState(text),
       confirmed: (source) => latest.current.onConfirmed(source),
       failure: (text) => latest.current.onFailure(text),
-      clearDanmaku: () => {
-        void renderer.current?.load();
-        emitted.current = 0;
-      },
     });
     const stopIdleWatch = watchIdlePlayback(
       art.video,
@@ -178,19 +189,11 @@ export function PlayerSurface(props: Props) {
       if (event.code === "KeyM") art.muted = !art.muted;
     };
     document.addEventListener("keydown", keys);
-    const visibility = () => {
-      if (document.hidden) {
-        void renderer.current?.load();
-        emitted.current = 0;
-      }
-    };
-    document.addEventListener("visibilitychange", visibility);
     return () => {
       stopIdleWatch();
       session.destroy();
       if (art.fullscreenWeb) art.fullscreenWeb = false;
       document.removeEventListener("keydown", keys);
-      document.removeEventListener("visibilitychange", visibility);
       renderer.current = null;
       player.current = null;
       art.off("fullscreen", positionDanmaku);
@@ -215,6 +218,19 @@ export function PlayerSurface(props: Props) {
     const plugin = renderer.current,
       settings = props.settings;
     if (!plugin) return;
+    const fontSizeChanged = plugin.option.fontSize !== settings.size;
+    if (fontSizeChanged) {
+      plugin.option.fontSize = settings.size;
+      const height = player.current?.template.$danmuku.clientHeight ?? 0;
+      const fontSize = Math.round(
+        Math.min(Math.max(settings.size, 12), Math.max(height, 12)),
+      );
+      player.current?.template.$danmuku
+        .querySelectorAll<HTMLElement>('[data-state="emit"], [data-state="stop"]')
+        .forEach((item) => {
+          item.style.fontSize = `${fontSize}px`;
+        });
+    }
     const height = player.current?.template.$danmuku.clientHeight ?? 400;
     const bottomMargin = height * (1 - settings.area);
     const topMargin = Math.min(
@@ -226,7 +242,6 @@ export function PlayerSurface(props: Props) {
         danmuku: [],
         emitter: false,
         opacity: settings.opacity,
-        fontSize: settings.size,
         speed: settings.duration,
         margin: [
           topMargin,
@@ -265,10 +280,6 @@ export function PlayerSurface(props: Props) {
         player.current?.video.paused
       )
         continue;
-      if (++emitted.current > 500) {
-        void plugin.load();
-        emitted.current = 1;
-      }
       plugin.emit({
         text: message.message,
         mode: 0,
@@ -277,6 +288,31 @@ export function PlayerSurface(props: Props) {
           fontWeight: String(props.settings.weight * 100),
         },
       });
+      const managed = plugin as ManagedDanmakuRenderer;
+      const queue = managed.queue;
+      const states = managed.states;
+      const waiting = states?.wait;
+      if (
+        !Array.isArray(queue) ||
+        !states ||
+        !Array.isArray(waiting) ||
+        queue.length < nextDanmakuCompaction.current
+      )
+        continue;
+
+      const expired = new Set(
+        waiting.filter(
+          (item) =>
+            item.$lastStartTime > 0 &&
+            item.$restTime <= 0 &&
+            item.$ref === null,
+        ),
+      );
+      if (expired.size) {
+        managed.queue = queue.filter((item) => !expired.has(item));
+        states.wait = waiting.filter((item) => !expired.has(item));
+      }
+      nextDanmakuCompaction.current = (managed.queue ?? queue).length + 100;
     }
   }, [props.messages, props.settings]);
   return (
@@ -285,8 +321,9 @@ export function PlayerSurface(props: Props) {
       {controlPlayer && idleSeconds !== null &&
         createPortal(
           <div className="player-idle-countdown" role="timer">
-            <Timer size={16} aria-hidden="true" />
-            <span>{idleSeconds} 秒后暂停直播</span>
+            <Timer size={20} aria-hidden="true" />
+            <strong>{idleSeconds}</strong>
+            <span>秒后暂停直播</span>
           </div>,
           controlPlayer.template.$player,
         )}

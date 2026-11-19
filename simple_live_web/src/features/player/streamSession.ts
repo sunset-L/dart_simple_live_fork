@@ -6,7 +6,6 @@ interface Events {
   state: (text: string) => void;
   confirmed: (source: Source) => void;
   failure: (text: string) => void;
-  clearDanmaku: () => void;
 }
 
 // Each load owns its engine and generation. Late events cannot replace a newer stream.
@@ -62,7 +61,6 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
     lastProgress = performance.now();
     position = -1;
     events.state(idlePaused ? "已暂停" : "缓冲中");
-    events.clearDanmaku();
     try {
       const cleanup = await attachStream(
         video,
