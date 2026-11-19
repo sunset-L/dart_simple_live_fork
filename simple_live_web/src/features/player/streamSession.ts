@@ -19,7 +19,8 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
   let proxy = false,
     settled = false,
     faulting = false,
-    firstFrame = false;
+    firstFrame = false,
+    idlePaused = false;
   let lastProgress = performance.now(),
     position = -1;
   const attempted = new Set<Source>();
@@ -37,7 +38,7 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
     settled = firstFrame = faulting = false;
     lastProgress = performance.now();
     position = -1;
-    events.state("缓冲中");
+    events.state(idlePaused ? "已暂停" : "缓冲中");
     events.clearDanmaku();
     try {
       const cleanup = await attachStream(
@@ -54,11 +55,17 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
         return;
       }
       dispose = cleanup;
+      // Renewing a signed URL must not resume playback after an idle pause.
+      if (idlePaused) {
+        settled = true;
+        return;
+      }
       try {
         await video.play();
       } catch (error) {
         if (
           !stopped &&
+          !idlePaused &&
           version === generation &&
           !video.muted &&
           error instanceof DOMException &&
@@ -83,7 +90,7 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
     }
   }
   function fail() {
-    if (stopped || !active || faulting) return;
+    if (stopped || !active || faulting || idlePaused) return;
     faulting = true;
     if (!proxy) {
       void start(active, true);
@@ -112,24 +119,33 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
   const error = () => {
     if (video.error) fail();
   };
+  const play = () => {
+    idlePaused = false;
+  };
   const pause = () => {
     if (settled) events.state("已暂停");
   };
   const waiting = () => {
     if (firstFrame) events.state("缓冲中");
   };
+  video.addEventListener("play", play);
   video.addEventListener("playing", playing);
   video.addEventListener("error", error);
   video.addEventListener("pause", pause);
   video.addEventListener("waiting", waiting);
   const health = setInterval(() => {
-    if (!active || faulting || (settled && video.paused)) return;
+    if (!active || faulting || idlePaused || (settled && video.paused)) return;
     if (video.currentTime !== position) {
       position = video.currentTime;
       lastProgress = performance.now();
     } else if (performance.now() - lastProgress > 25000) fail();
   }, 5000);
   return {
+    pauseForIdle() {
+      idlePaused = true;
+      video.pause();
+      events.state("已暂停");
+    },
     load(source: Source) {
       if (source === active) return;
       if (firstFrame && active) previous = active;
@@ -139,6 +155,7 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
     stop() {
       generation++;
       faulting = true;
+      idlePaused = false;
       active = previous = null;
       dispose?.();
       dispose = undefined;
@@ -153,6 +170,7 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
       dispose?.();
       video.removeAttribute("src");
       video.load();
+      video.removeEventListener("play", play);
       video.removeEventListener("playing", playing);
       video.removeEventListener("error", error);
       video.removeEventListener("pause", pause);

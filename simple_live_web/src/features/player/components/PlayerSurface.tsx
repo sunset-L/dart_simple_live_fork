@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { theme } from "antd";
 import Artplayer from "artplayer";
+import { Timer } from "lucide-react";
 import danmuku, {
   type Result as DanmakuRenderer,
 } from "artplayer-plugin-danmuku";
 import type { DanmakuMessage, Source, Quality } from "../../../types/playback";
 import type { PlayerSettings } from "../../../stores/playerSettings";
 import { createStreamSession } from "../streamSession";
+import { watchIdlePlayback } from "../idlePause";
 import { normalizeDanmakuColor } from "../../danmaku/color";
 import { PlayerControls } from "./PlayerControls";
 
@@ -36,6 +39,7 @@ export function PlayerSurface(props: Props) {
   const host = useRef<HTMLDivElement>(null);
   const player = useRef<Artplayer | null>(null);
   const [controlPlayer, setControlPlayer] = useState<Artplayer | null>(null);
+  const [idleSeconds, setIdleSeconds] = useState<number | null>(null);
   const renderer = useRef<DanmakuRenderer | null>(null);
   const latest = useRef(props);
   latest.current = props;
@@ -145,6 +149,11 @@ export function PlayerSurface(props: Props) {
         emitted.current = 0;
       },
     });
+    const stopIdleWatch = watchIdlePlayback(
+      art.video,
+      setIdleSeconds,
+      session.pauseForIdle,
+    );
     load.current = session.load;
     stop.current = session.stop;
     const keys = (event: KeyboardEvent) => {
@@ -177,6 +186,7 @@ export function PlayerSurface(props: Props) {
     };
     document.addEventListener("visibilitychange", visibility);
     return () => {
+      stopIdleWatch();
       session.destroy();
       if (art.fullscreenWeb) art.fullscreenWeb = false;
       document.removeEventListener("keydown", keys);
@@ -272,6 +282,14 @@ export function PlayerSurface(props: Props) {
   return (
     <>
       <div className="player-surface" ref={host} />
+      {controlPlayer && idleSeconds !== null &&
+        createPortal(
+          <div className="player-idle-countdown" role="timer">
+            <Timer size={16} aria-hidden="true" />
+            <span>{idleSeconds} 秒后暂停直播</span>
+          </div>,
+          controlPlayer.template.$player,
+        )}
       {controlPlayer && (
         <PlayerControls
           key={controlPlayer.id}

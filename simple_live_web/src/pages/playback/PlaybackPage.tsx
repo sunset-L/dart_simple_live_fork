@@ -40,6 +40,7 @@ import { usePlayerSettings } from "../../stores/playerSettings";
 import { useLibrary } from "../../stores/useLibrary";
 import { useFollowStatus } from "../../features/follow/useFollowStatus";
 import { FollowStatusLabel } from "../../features/follow/FollowStatusLabel";
+import { needsFollowAvatar } from "../../features/follow/profile";
 import "../../styles/player.css";
 import { Picture } from "../../components/Picture";
 import { platforms } from "../../app/platforms";
@@ -81,9 +82,18 @@ export function PlaybackPage({
   const sidebarCollapsed = preferences.playbackSidebarCollapsed;
   const [panel, setPanel] = useState("chat"),
     [keyword, setKeyword] = useState("");
-  const followStatus = useFollowStatus(
-    data.follows,
-    !sidebarCollapsed && panel === "follows",
+  const showFollows = !sidebarCollapsed && panel === "follows";
+  const { statuses: followStatuses } = useFollowStatus(data.follows, showFollows);
+  const sidebarFollows = useMemo(
+    () =>
+      showFollows
+        ? [...data.follows].sort(
+            (left, right) =>
+              Number(followStatuses[right.id]?.status === true) -
+              Number(followStatuses[left.id]?.status === true),
+          )
+        : [],
+    [data.follows, followStatuses, showFollows],
   );
   const [status, setStatus] = useState("等待连接");
   const retries = useRef(0),
@@ -482,28 +492,49 @@ export function PlaybackPage({
                 ))}
             </div>
           )}
-          {!sidebarCollapsed && panel === "follows" && (
+          {showFollows && (
             <div className="chat-list">
-              {data.follows.map((user) => (
-                <a
-                  className="follow-link"
-                  key={user.id}
-                  href={playbackUrl(user.siteId, user.roomId)}
-                  target="_blank"
-                  rel="noopener"
-                  onClick={(event) => {
-                    event.preventDefault();
-                    if (followStatus.statuses[user.id]?.status !== false)
-                      openPlayback(user.siteId, user.roomId);
-                  }}
-                  aria-disabled={
-                    followStatus.statuses[user.id]?.status === false
-                  }
-                >
-                  {user.userName}
-                  <FollowStatusLabel value={followStatus.statuses[user.id]} />
-                </a>
-              ))}
+              {sidebarFollows.map((user) => {
+                const state = followStatuses[user.id];
+                const offline = state?.status === false;
+                const avatar = state?.face || user.face;
+                const heat = state?.status === true ? state.online : undefined;
+                return (
+                  <a
+                    className="follow-link"
+                    key={user.id}
+                    href={
+                      offline ? undefined : playbackUrl(user.siteId, user.roomId)
+                    }
+                    target="_blank"
+                    rel="noopener"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      if (!offline) openPlayback(user.siteId, user.roomId);
+                    }}
+                    role={offline ? "link" : undefined}
+                    aria-disabled={offline || undefined}
+                  >
+                    {!needsFollowAvatar(avatar) && (
+                      <Picture src={avatar} className="follow-link-avatar" />
+                    )}
+                    <div className="follow-link-profile">
+                      <span className="follow-link-name" title={user.userName}>
+                        {user.userName}
+                      </span>
+                      {heat !== undefined && Number.isFinite(heat) && (
+                        <Tooltip title={heat.toLocaleString("en-US")}>
+                          <span className="follow-link-heat">
+                            <Flame size={12} aria-hidden="true" />
+                            {formatHeat(heat)}
+                          </span>
+                        </Tooltip>
+                      )}
+                    </div>
+                    <FollowStatusLabel value={state} />
+                  </a>
+                );
+              })}
             </div>
           )}
           {!sidebarCollapsed && panel === "settings" && (

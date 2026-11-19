@@ -84,6 +84,7 @@ html:has(.playback-page)::-webkit-scrollbar-thumb,
 }
 .playback-sidebar-edge .playback-sidebar-toggle {
   right: 0;
+  height: 66px;
 }
 .playback-sidebar:hover + .playback-sidebar-edge .playback-sidebar-toggle,
 .playback-sidebar-edge:hover .playback-sidebar-toggle {
@@ -125,6 +126,22 @@ html:has(.playback-page)::-webkit-scrollbar-thumb,
 }
 .player-surface {
   position: relative;
+}
+.player-idle-countdown {
+  position: absolute;
+  bottom: calc(var(--art-control-height, 46px) + 12px);
+  left: 12px;
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 .stage-danmaku {
   position: absolute;
@@ -632,14 +649,38 @@ html:has(.playback-page)::-webkit-scrollbar-thumb,
 }
 .follow-link {
   display: flex;
-  justify-content: space-between;
+  align-items: center;
   color: #e6ebf1;
   text-decoration: none;
-  padding: 12px;
+  padding: 8px 10px;
+  min-height: 48px;
   border-bottom: 1px solid #333;
-  gap: 12px;
+  gap: 8px;
 }
-.follow-link span {
+.follow-link-avatar {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.follow-link-profile {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+}
+.follow-link-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.follow-link-heat {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 3px;
+  font-size: 11px;
   color: #9ba8ba;
 }
 .follow-link[aria-disabled="true"] {
