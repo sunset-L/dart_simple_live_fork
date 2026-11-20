@@ -29,7 +29,7 @@ export function useFollowStatus(
   const [loading, setLoading] = useState(false);
   const [version, setVersion] = useState(0);
   const lastVersion = useRef(version);
-  const initialized = useRef(false);
+  const completedRooms = useRef<string | null>(null);
   const manualRefresh = useRef<((result: RefreshResult) => void) | undefined>(
     undefined,
   );
@@ -46,8 +46,8 @@ export function useFollowStatus(
     >[];
     const isManualRefresh = version !== lastVersion.current;
     lastVersion.current = version;
-    if (!onlyMissing && initialized.current && !isManualRefresh) return;
-    initialized.current = true;
+    if (!onlyMissing && completedRooms.current === rooms && !isManualRefresh)
+      return;
     const items =
       onlyMissing && !isManualRefresh
         ? currentItems.filter((item) => !statusesRef.current[item.id])
@@ -82,6 +82,7 @@ export function useFollowStatus(
         }));
       }
       if (!controller.signal.aborted) {
+        completedRooms.current = rooms;
         const next = { ...statusesRef.current };
         for (const result of results) {
           if (result.status !== true && result.status !== false) failed++;

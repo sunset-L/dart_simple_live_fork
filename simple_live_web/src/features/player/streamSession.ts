@@ -1,11 +1,13 @@
 import type { Source } from "../../types/playback";
 import { attachStream } from "./engine";
+import { createAutoplay } from "./autoplay";
 
 interface Events {
   sources: () => Source[];
   state: (text: string) => void;
   confirmed: (source: Source) => void;
   failure: (text: string) => void;
+  autoplayBlocked: (blocked: boolean) => void;
 }
 
 // Each load owns its engine and generation. Late events cannot replace a newer stream.
@@ -24,6 +26,11 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
     position = -1;
   let healthTimer: ReturnType<typeof setTimeout> | undefined;
   const attempted = new Set<Source>();
+  const autoplay = createAutoplay(
+    video,
+    events.autoplayBlocked,
+    () => !stopped && Boolean(active) && !faulting,
+  );
 
   function clearHealthTimer() {
     clearTimeout(healthTimer);
@@ -81,25 +88,9 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
         settled = true;
         return;
       }
-      try {
-        await video.play();
-      } catch (error) {
-        if (
-          error instanceof DOMException &&
-          error.name === 'NotAllowedError' &&
-          !stopped &&
-          !idlePaused &&
-          version === generation
-        ) {
-          // Browsers may reject audible autoplay on a fresh page. Use the
-          // permitted fallback, then restore the requested audible state.
-          video.muted = true;
-          await video.play();
-          video.muted = false;
-          if (!video.paused) return;
-        }
-        throw error;
-      }
+      await autoplay.play(
+        () => !stopped && !idlePaused && version === generation,
+      );
     } catch (error) {
       if (stopped || version !== generation) return;
       if (error instanceof DOMException && error.name === "NotAllowedError") {
@@ -168,6 +159,7 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
   video.addEventListener("pause", pause);
   video.addEventListener("waiting", waiting);
   return {
+    enableSound: autoplay.enableSound,
     pauseForIdle() {
       idlePaused = true;
       clearHealthTimer();
@@ -185,6 +177,7 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
       faulting = true;
       clearHealthTimer();
       idlePaused = false;
+      autoplay.reset();
       active = previous = null;
       dispose?.();
       dispose = undefined;
@@ -195,6 +188,7 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
     destroy() {
       stopped = true;
       generation++;
+      autoplay.destroy();
       clearHealthTimer();
       dispose?.();
       video.removeAttribute("src");

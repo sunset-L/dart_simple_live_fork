@@ -73,8 +73,9 @@ export function openPlayback(
           `simple-live-${site}-${roomId}`,
         );
   if (tab) {
-    tab.location.replace(playbackUrl(site, roomId));
-    tab.opener = null;
+    if (targetWindow === tab) tab.location.replace(playbackUrl(site, roomId));
+    // Live pages are same-origin. Keep the opener's real click activation
+    // available for the first audible play, and avoid a second navigation.
     playbackTabs.set(key, tab);
     tab.focus();
   }

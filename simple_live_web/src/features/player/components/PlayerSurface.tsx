@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { theme } from "antd";
 import Artplayer from "artplayer";
-import { Timer, X } from "lucide-react";
+import { Timer, Volume2, X } from "lucide-react";
 import danmuku, {
   type Result as DanmakuRenderer,
 } from "artplayer-plugin-danmuku";
@@ -55,11 +55,13 @@ export function PlayerSurface(props: Props) {
   const player = useRef<Artplayer | null>(null);
   const [controlPlayer, setControlPlayer] = useState<Artplayer | null>(null);
   const [idleNotice, setIdleNotice] = useState<IdlePlaybackNotice>(null);
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const renderer = useRef<DanmakuRenderer | null>(null);
   const latest = useRef(props);
   latest.current = props;
   const load = useRef<(source: Source) => void>(() => {});
   const stop = useRef<() => void>(() => {});
+  const enableSound = useRef<() => void>(() => {});
   const seen = useRef(0);
   const nextDanmakuCompaction = useRef(600);
   const { token } = theme.useToken();
@@ -160,6 +162,7 @@ export function PlayerSurface(props: Props) {
       state: (text) => latest.current.onState(text),
       confirmed: (source) => latest.current.onConfirmed(source),
       failure: (text) => latest.current.onFailure(text),
+      autoplayBlocked: setAutoplayBlocked,
     });
     const stopIdleWatch = watchIdlePlayback(
       art.video,
@@ -173,6 +176,7 @@ export function PlayerSurface(props: Props) {
     updatePaused();
     load.current = session.load;
     stop.current = session.stop;
+    enableSound.current = session.enableSound;
     const keys = (event: KeyboardEvent) => {
       if (
         event.ctrlKey ||
@@ -327,6 +331,21 @@ export function PlayerSurface(props: Props) {
   return (
     <>
       <div className="player-surface" ref={host} />
+      {controlPlayer && autoplayBlocked &&
+        createPortal(
+          <button
+            type="button"
+            className="player-autoplay-notice"
+            onClick={(event) => {
+              event.stopPropagation();
+              enableSound.current();
+            }}
+          >
+            <Volume2 size={20} aria-hidden="true" />
+            <span>点击开启声音（浏览器限制自动有声播放）</span>
+          </button>,
+          controlPlayer.template.$player,
+        )}
       {controlPlayer && idleNotice !== null &&
         createPortal(
           <div
