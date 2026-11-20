@@ -58,7 +58,11 @@ class FollowUserController extends BasePageController<FollowUser> {
       EventBus.kBottomNavigationBarClicked,
       (index) {
         if (index == 1) {
-          scrollToTopOrRefresh();
+          if (isHistorySelected) {
+            setFilterMode(tagList.first);
+          } else {
+            scrollToTopOrRefresh();
+          }
         }
       },
     );
