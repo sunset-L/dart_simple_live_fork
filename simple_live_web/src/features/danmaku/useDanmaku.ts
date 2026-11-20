@@ -3,7 +3,12 @@ import { playbackApi } from "../../services/playbackApi";
 import type { DanmakuMessage, DanmakuStatus } from "../../types/playback";
 import { normalizeDanmakuColor } from "./color";
 
-export function useDanmaku(site: string, room: string, enabled: boolean) {
+export function useDanmaku(
+  site: string,
+  room: string,
+  enabled: boolean,
+  paused = false,
+) {
   const [messages, setMessages] = useState<DanmakuMessage[]>([]);
   const [status, setStatus] = useState<DanmakuStatus>("closed");
   const [online, setOnline] = useState<number | null>(null);
@@ -12,7 +17,10 @@ export function useDanmaku(site: string, room: string, enabled: boolean) {
   useEffect(() => {
     setMessages([]);
     setOnline(null);
-    if (!enabled) {
+  }, [site, room, enabled, revision]);
+  useEffect(() => {
+    // Suspend only the connection; keep received messages when pausing/resuming.
+    if (!enabled || paused) {
       setStatus("closed");
       return;
     }
@@ -74,7 +82,7 @@ export function useDanmaku(site: string, room: string, enabled: boolean) {
       clearTimeout(timer);
       socket?.close();
     };
-  }, [site, room, enabled, revision]);
+  }, [site, room, enabled, paused, revision]);
   return {
     messages,
     status,

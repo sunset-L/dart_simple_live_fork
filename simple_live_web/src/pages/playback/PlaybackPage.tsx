@@ -75,7 +75,8 @@ export function PlaybackPage({
     return () => observer.disconnect();
   }, []);
   const session = usePlaybackSession(site, roomId);
-  const chat = useDanmaku(site, roomId, session.detail?.status === true);
+  const [paused, setPaused] = useState(true);
+  const chat = useDanmaku(site, roomId, session.detail?.status === true, paused);
   const { data, update } = useLibrary();
   const [settings, setSettings] = usePlayerSettings();
   const { data: preferences } = usePreferences();
@@ -428,6 +429,7 @@ export function PlaybackPage({
                   messages={messages}
                   status={status}
                   onState={setStatus}
+                  onPausedChange={setPaused}
                   onFailure={failed}
                   onConfirmed={session.confirm}
                   qualities={session.qualities}

@@ -2,14 +2,14 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { theme } from "antd";
 import Artplayer from "artplayer";
-import { Timer } from "lucide-react";
+import { Timer, X } from "lucide-react";
 import danmuku, {
   type Result as DanmakuRenderer,
 } from "artplayer-plugin-danmuku";
 import type { DanmakuMessage, Source, Quality } from "../../../types/playback";
 import type { PlayerSettings } from "../../../stores/playerSettings";
 import { createStreamSession } from "../streamSession";
-import { watchIdlePlayback } from "../idlePause";
+import { watchIdlePlayback, type IdlePlaybackNotice } from "../idlePause";
 import { normalizeDanmakuColor } from "../../danmaku/color";
 import { PlayerControls } from "./PlayerControls";
 
@@ -46,6 +46,7 @@ interface Props {
   onRefresh: () => void;
   onSettings: (settings: Partial<PlayerSettings>) => void;
   onState: (status: string) => void;
+  onPausedChange: (paused: boolean) => void;
   onFailure: (message: string) => void;
   onConfirmed: (source: Source) => void;
 }
@@ -53,7 +54,7 @@ export function PlayerSurface(props: Props) {
   const host = useRef<HTMLDivElement>(null);
   const player = useRef<Artplayer | null>(null);
   const [controlPlayer, setControlPlayer] = useState<Artplayer | null>(null);
-  const [idleSeconds, setIdleSeconds] = useState<number | null>(null);
+  const [idleNotice, setIdleNotice] = useState<IdlePlaybackNotice>(null);
   const renderer = useRef<DanmakuRenderer | null>(null);
   const latest = useRef(props);
   latest.current = props;
@@ -162,9 +163,14 @@ export function PlayerSurface(props: Props) {
     });
     const stopIdleWatch = watchIdlePlayback(
       art.video,
-      setIdleSeconds,
+      setIdleNotice,
       session.pauseForIdle,
     );
+    const playbackEvents = ["play", "pause", "ended", "emptied"];
+    const updatePaused = () => latest.current.onPausedChange(art.video.paused);
+    for (const event of playbackEvents)
+      art.video.addEventListener(event, updatePaused);
+    updatePaused();
     load.current = session.load;
     stop.current = session.stop;
     const keys = (event: KeyboardEvent) => {
@@ -191,6 +197,9 @@ export function PlayerSurface(props: Props) {
     document.addEventListener("keydown", keys);
     return () => {
       stopIdleWatch();
+      for (const event of playbackEvents)
+        art.video.removeEventListener(event, updatePaused);
+      latest.current.onPausedChange(true);
       session.destroy();
       if (art.fullscreenWeb) art.fullscreenWeb = false;
       document.removeEventListener("keydown", keys);
@@ -318,12 +327,35 @@ export function PlayerSurface(props: Props) {
   return (
     <>
       <div className="player-surface" ref={host} />
-      {controlPlayer && idleSeconds !== null &&
+      {controlPlayer && idleNotice !== null &&
         createPortal(
-          <div className="player-idle-countdown" role="timer">
+          <div
+            className={`player-idle-notice${idleNotice.type === "paused" ? " is-paused" : ""}`}
+            role={idleNotice.type === "paused" ? "status" : "timer"}
+          >
             <Timer size={20} aria-hidden="true" />
-            <strong>{idleSeconds}</strong>
-            <span>秒后暂停直播</span>
+            {idleNotice.type === "countdown" ? (
+              <>
+                <strong>{idleNotice.seconds}</strong>
+                <span>秒后暂停直播</span>
+              </>
+            ) : (
+              <>
+                <span>长时间无操作已暂停</span>
+                <button
+                  type="button"
+                  className="player-idle-notice-close"
+                  aria-label="关闭暂停提示"
+                  title="关闭暂停提示"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setIdleNotice(null);
+                  }}
+                >
+                  <X size={18} aria-hidden="true" />
+                </button>
+              </>
+            )}
           </div>,
           controlPlayer.template.$player,
         )}

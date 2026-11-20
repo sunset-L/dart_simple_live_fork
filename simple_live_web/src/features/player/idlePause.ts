@@ -1,9 +1,14 @@
 const idleDelay = 10 * 60 * 1000;
 const warningDuration = 10 * 1000;
 
+export type IdlePlaybackNotice =
+  | { type: "countdown"; seconds: number }
+  | { type: "paused" }
+  | null;
+
 export function watchIdlePlayback(
   video: HTMLVideoElement,
-  showCountdown: (seconds: number | null) => void,
+  showNotice: (notice: IdlePlaybackNotice) => void,
   pause: () => void,
 ) {
   let timer: number | undefined;
@@ -13,7 +18,7 @@ export function watchIdlePlayback(
   const stop = () => {
     window.clearTimeout(timer);
     lastActivity = undefined;
-    if (pauseAt !== undefined) showCountdown(null);
+    if (pauseAt !== undefined) showNotice(null);
     pauseAt = undefined;
   };
 
@@ -33,13 +38,15 @@ export function watchIdlePlayback(
     if (remaining <= 0) {
       stop();
       pause();
+      showNotice({ type: "paused" });
       return;
     }
     const seconds = Math.ceil(remaining / 1000);
-    showCountdown(seconds);
+    showNotice({ type: "countdown", seconds });
     timer = window.setTimeout(check, remaining - (seconds - 1) * 1000);
   }
 
+  const play = () => showNotice(null);
   const playing = () => {
     if (lastActivity !== undefined) return;
     lastActivity = performance.now();
@@ -50,13 +57,14 @@ export function watchIdlePlayback(
     lastActivity = performance.now();
     if (pauseAt === undefined) return;
     pauseAt = undefined;
-    showCountdown(null);
+    showNotice(null);
     window.clearTimeout(timer);
     timer = window.setTimeout(check, idleDelay);
   };
 
   const inputEvents = ["pointermove", "pointerdown", "wheel", "keydown"];
   const stopEvents = ["pause", "ended", "error"];
+  video.addEventListener("play", play);
   video.addEventListener("playing", playing);
   for (const event of stopEvents) video.addEventListener(event, stop);
   for (const event of inputEvents)
@@ -64,6 +72,7 @@ export function watchIdlePlayback(
 
   return () => {
     window.clearTimeout(timer);
+    video.removeEventListener("play", play);
     video.removeEventListener("playing", playing);
     for (const event of stopEvents) video.removeEventListener(event, stop);
     for (const event of inputEvents)

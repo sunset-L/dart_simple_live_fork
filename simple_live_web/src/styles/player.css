@@ -127,8 +127,10 @@ html:has(.playback-page)::-webkit-scrollbar-thumb,
 .player-surface {
   position: relative;
 }
-.player-idle-countdown {
+.player-idle-notice {
   position: absolute;
+  box-sizing: border-box;
+  max-width: calc(100% - 24px);
   bottom: calc(var(--art-control-height, 46px) + 12px);
   left: 12px;
   z-index: 80;
@@ -148,15 +150,41 @@ html:has(.playback-page)::-webkit-scrollbar-thumb,
   font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
-.player-idle-countdown svg,
-.player-idle-countdown strong {
+.player-idle-notice > svg,
+.player-idle-notice strong {
   color: #faad14;
 }
-.player-idle-countdown strong {
+.player-idle-notice strong {
   min-width: 2ch;
   font-size: 21px;
   line-height: 1;
   text-align: right;
+}
+.player-idle-notice > svg {
+  flex-shrink: 0;
+}
+.player-idle-notice.is-paused {
+  pointer-events: auto;
+}
+.player-idle-notice-close {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.player-idle-notice-close:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.player-idle-notice-close:focus-visible {
+  outline: 2px solid #faad14;
+  outline-offset: 2px;
 }
 .stage-danmaku {
   position: absolute;
