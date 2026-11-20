@@ -29,7 +29,7 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
   const autoplay = createAutoplay(
     video,
     events.autoplayBlocked,
-    () => !stopped && Boolean(active) && !faulting,
+    () => !stopped && Boolean(active) && !faulting && !idlePaused,
   );
 
   function clearHealthTimer() {
@@ -55,6 +55,7 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
 
   async function start(source: Source, useProxy: boolean) {
     const version = ++generation;
+    autoplay.beginLoad();
     clearHealthTimer();
     faulting = true;
     dispose?.();
@@ -146,6 +147,7 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
     lastProgress = performance.now();
   };
   const pause = () => {
+    autoplay.paused();
     clearHealthTimer();
     if (settled) events.state("已暂停");
   };
@@ -160,8 +162,10 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
   video.addEventListener("waiting", waiting);
   return {
     enableSound: autoplay.enableSound,
+    cancelStartupAssistance: autoplay.cancelStartupAssistance,
     pauseForIdle() {
       idlePaused = true;
+      autoplay.cancelStartupAssistance();
       clearHealthTimer();
       video.pause();
       events.state("已暂停");

@@ -177,17 +177,32 @@ export function PlayerSurface(props: Props) {
     load.current = session.load;
     stop.current = session.stop;
     enableSound.current = session.enableSound;
+    const acceptsHotkey = (event: KeyboardEvent) => !(
+      event.ctrlKey || event.metaKey || event.altKey ||
+      /INPUT|TEXTAREA|SELECT|BUTTON|A/.test(
+        (event.target as HTMLElement)?.tagName ?? "",
+      ) || (event.target as HTMLElement)?.isContentEditable
+    );
+    const manualInput = (event: Event) => {
+      if (!event.isTrusted) return;
+      const target = event.target instanceof Element ? event.target : null;
+      const control = target?.closest(
+        ".art-control-playAndPause, .art-control-volume, .art-state",
+      );
+      const shortcut = event instanceof KeyboardEvent && acceptsHotkey(event) &&
+        (event.code === "Space" || event.code === "KeyM");
+      if ((control && art.template.$player.contains(control)) || shortcut)
+        session.cancelStartupAssistance();
+    };
+    const manualEvents = [
+      "pointerdown", "mousedown", "click", "wheel", "keydown", "touchend",
+    ];
+    // Register before startup's capture listeners, including ArtPlayer inputs
+    // which stop propagation. Do not consume or alter the original operation.
+    for (const event of manualEvents)
+      window.addEventListener(event, manualInput, { capture: true, passive: true });
     const keys = (event: KeyboardEvent) => {
-      if (
-        event.ctrlKey ||
-        event.metaKey ||
-        event.altKey ||
-        /INPUT|TEXTAREA|SELECT|BUTTON|A/.test(
-          (event.target as HTMLElement)?.tagName ?? "",
-        ) ||
-        (event.target as HTMLElement)?.isContentEditable
-      )
-        return;
+      if (!acceptsHotkey(event)) return;
       if (event.code === "Space") {
         event.preventDefault();
         art.toggle();
@@ -201,6 +216,8 @@ export function PlayerSurface(props: Props) {
     document.addEventListener("keydown", keys);
     return () => {
       stopIdleWatch();
+      for (const event of manualEvents)
+        window.removeEventListener(event, manualInput, true);
       for (const event of playbackEvents)
         art.video.removeEventListener(event, updatePaused);
       latest.current.onPausedChange(true);
@@ -342,7 +359,7 @@ export function PlayerSurface(props: Props) {
             }}
           >
             <Volume2 size={20} aria-hidden="true" />
-            <span>点击开启声音（浏览器限制自动有声播放）</span>
+            <span>操作鼠标或键盘尝试开声，点击此处开启声音</span>
           </button>,
           controlPlayer.template.$player,
         )}

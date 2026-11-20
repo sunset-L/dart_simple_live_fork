@@ -3,56 +3,123 @@ export function createAutoplay(
   onBlocked: (blocked: boolean) => void,
   canPlay: () => boolean,
 ) {
+  let startup: "initial" | "assisting" | "finished" = "initial";
   let mutedForAutoplay = false;
   let generation = 0;
+  let attemptedPlayback = false;
+  let loading = false;
+  let soundAttempt: number | undefined;
+  let nextPassiveAttempt = 0;
+  const inputEvents = [
+    "pointermove",
+    "pointerdown",
+    "click",
+    "wheel",
+    "keydown",
+    "touchend",
+  ];
 
-  const complete = () => {
+  function removeInputs() {
+    for (const event of inputEvents)
+      window.removeEventListener(event, gesture, true);
+  }
+  function finishStartup() {
+    startup = "finished";
+    removeInputs();
+  }
+  function invalidate() {
+    generation++;
+    soundAttempt = undefined;
+  }
+  function complete() {
     mutedForAutoplay = false;
     onBlocked(false);
-  };
-  const reset = () => {
-    generation++;
-    if (mutedForAutoplay) video.muted = false;
+    finishStartup();
+  }
+  function cancelStartupAssistance() {
+    invalidate();
+    // Relinquish the temporary mute without changing the user's controls.
     complete();
-  };
+  }
 
-  async function enableSound() {
-    if (!mutedForAutoplay || !canPlay()) return;
+  function soundAllowed() {
+    const browser = navigator as Navigator & {
+      getAutoplayPolicy?: (element: HTMLMediaElement) => string;
+    };
+    try {
+      if (browser.getAutoplayPolicy)
+        return browser.getAutoplayPolicy(video) === "allowed";
+    } catch {
+      // Not all implementations support querying an individual media element.
+    }
+    return Boolean(
+      navigator.userActivation?.isActive ||
+      navigator.userActivation?.hasBeenActive,
+    );
+  }
+
+  async function enableSound(resume: boolean) {
+    if (
+      !mutedForAutoplay ||
+      !canPlay() ||
+      soundAttempt !== undefined ||
+      (!resume && (video.paused || video.volume === 0))
+    )
+      return;
     const version = ++generation;
+    soundAttempt = version;
     const wasPaused = video.paused;
-    // This must run synchronously inside a real input event, before awaiting.
+    // Keep this synchronous so a real input's activation is not lost.
     video.muted = false;
-    if (video.volume === 0) video.volume = 0.8;
+    if (resume && video.volume === 0) video.volume = 0.8;
     try {
       await video.play();
       if (version === generation) complete();
     } catch {
-      if (version !== generation) return;
+      if (version !== generation || !canPlay()) return;
+      nextPassiveAttempt = performance.now() + 1000;
       video.muted = true;
-      if (!wasPaused) void video.play().catch(() => {});
+      // A control operation invalidates this attempt before it can undo a pause.
+      if (!wasPaused && version === generation && canPlay())
+        await video.play().catch(() => {});
+    } finally {
+      if (soundAttempt === version) soundAttempt = undefined;
     }
   }
 
-  const gesture = (event: Event) => {
-    // Ordinary interaction may enable sound, but must never undo a pause
-    // or a volume slider explicitly set to zero.
-    if (event.isTrusted && !video.paused && video.volume > 0)
-      void enableSound();
-  };
-  const inputEvents = ["click", "keydown", "touchend"];
-  for (const event of inputEvents) window.addEventListener(event, gesture);
+  function gesture(event: Event) {
+    if (startup !== "assisting" || !event.isTrusted) return;
+    const passive = event.type === "pointermove" || event.type === "wheel";
+    if (
+      passive &&
+      (performance.now() < nextPassiveAttempt || !soundAllowed())
+    )
+      return;
+    // Touch/pen pointerdown is not an activation; wait for click/touchend.
+    if (
+      event instanceof PointerEvent &&
+      event.type === "pointerdown" &&
+      event.pointerType !== "mouse"
+    )
+      return;
+    void enableSound(false);
+  }
 
   return {
+    beginLoad() {
+      invalidate();
+      loading = true;
+    },
     async play(current: () => boolean) {
+      attemptedPlayback = true;
+      loading = false;
       const version = ++generation;
-      if (mutedForAutoplay) video.muted = false;
       try {
         await video.play();
-        if (current() && version === generation) complete();
+        if (current() && version === generation && !mutedForAutoplay) complete();
       } catch (error) {
+        if (!current() || version !== generation) return;
         if (
-          !current() ||
-          version !== generation ||
           !(error instanceof DOMException) ||
           error.name !== "NotAllowedError" ||
           video.muted
@@ -61,19 +128,34 @@ export function createAutoplay(
         mutedForAutoplay = true;
         onBlocked(true);
         video.muted = true;
-        // Unmuting immediately here would make the browser pause again.
-        // Keep muted playback until a real gesture grants audible playback.
+        if (startup === "initial") {
+          startup = "assisting";
+          for (const event of inputEvents)
+            window.addEventListener(event, gesture, {
+              capture: true,
+              passive: true,
+            });
+        }
+        // Playback takes priority. Never immediately undo this fallback mute.
         await video.play();
       } finally {
-        // The opener is only needed during startup, not for later navigation.
         window.opener = null;
       }
     },
-    enableSound: () => void enableSound(),
-    reset,
+    enableSound: () => void enableSound(true),
+    cancelStartupAssistance,
+    paused() {
+      if (!loading && soundAttempt === undefined && video.paused)
+        cancelStartupAssistance();
+    },
+    reset() {
+      loading = false;
+      invalidate();
+      // The initial empty source must not consume the page's startup phase.
+      if (attemptedPlayback) complete();
+    },
     destroy() {
-      for (const event of inputEvents) window.removeEventListener(event, gesture);
-      reset();
+      cancelStartupAssistance();
     },
   };
 }
