@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 
 import '../accounts/account_service.dart';
 import '../library/library_service.dart';
@@ -11,10 +10,8 @@ class LanSyncReceiver {
 
   final LibraryService _library;
   final AccountService _accounts;
-  final Random _random = Random.secure();
   HttpServer? _server;
   Timer? _expiry;
-  String? _token;
   DateTime? _expiresAt;
 
   Future<Map<String, dynamic>> control(Map<String, dynamic> body) async {
@@ -33,9 +30,8 @@ class LanSyncReceiver {
 
   Future<Map<String, dynamic>> _status() async {
     final server = _server;
-    final token = _token;
     final expiresAt = _expiresAt;
-    if (server == null || token == null || expiresAt == null) {
+    if (server == null || expiresAt == null) {
       return {'status': false};
     }
     if (!expiresAt.isAfter(DateTime.now())) {
@@ -45,7 +41,6 @@ class LanSyncReceiver {
     return {
       'status': true,
       'port': server.port,
-      'token': token,
       'addresses': await _localAddresses(),
       'expiresAt': expiresAt.millisecondsSinceEpoch,
     };
@@ -64,11 +59,7 @@ class LanSyncReceiver {
     }
     server ??= await HttpServer.bind(InternetAddress.anyIPv4, 0);
 
-    final token = base64UrlEncode(
-      List<int>.generate(24, (_) => _random.nextInt(256)),
-    ).replaceAll('=', '');
     _server = server;
-    _token = token;
     final expiresAt = DateTime.now().add(const Duration(minutes: 10));
     _expiresAt = expiresAt;
     _expiry = Timer(const Duration(minutes: 10), () {
@@ -84,7 +75,6 @@ class LanSyncReceiver {
     return {
       'status': true,
       'port': server.port,
-      'token': token,
       'addresses': addresses,
       'expiresAt': expiresAt.millisecondsSinceEpoch,
     };
@@ -93,7 +83,6 @@ class LanSyncReceiver {
   Future<void> _stop() async {
     _expiry?.cancel();
     _expiry = null;
-    _token = null;
     _expiresAt = null;
     final server = _server;
     _server = null;
@@ -153,10 +142,6 @@ class LanSyncReceiver {
       } else {
         if (request.method != 'POST') {
           throw const _ReceiverError(HttpStatus.methodNotAllowed, '不支持的请求方法');
-        }
-        final supplied = request.headers.value('x-simple-live-token') ?? '';
-        if (supplied.isEmpty || supplied != _token) {
-          throw const _ReceiverError(HttpStatus.unauthorized, '配对码无效或已过期');
         }
         final payload = await _readJson(request);
         final overlay = request.uri.queryParameters['overlay'] == '1';

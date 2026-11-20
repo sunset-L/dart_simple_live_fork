@@ -884,20 +884,17 @@ nav button.active {
   gap: 7px;
   line-height: 1;
 }
-.lan-receiver-qr {
+.lan-receiver-info {
   display: flex;
-  align-items: center;
-  gap: 18px;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 7px;
   flex-wrap: wrap;
   margin: 12px 0;
-}
-.lan-receiver-qr > div:last-child {
-  display: grid;
-  gap: 7px;
   color: var(--muted);
   font-size: 13px;
 }
-.lan-receiver-qr strong {
+.lan-receiver-info strong {
   color: var(--text);
   font-size: 15px;
 }

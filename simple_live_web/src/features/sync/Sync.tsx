@@ -4,7 +4,6 @@ import {
   Button,
   ConfigProvider,
   Input,
-  QRCode,
   Select,
   Segmented,
   Switch,
@@ -58,7 +57,6 @@ interface Remote {
 interface LanReceiver {
   status: boolean;
   port: number;
-  token: string;
   addresses: string[];
   expiresAt: number;
 }
@@ -157,7 +155,7 @@ export function Sync({ active, data, commit, notify }: Props) {
     if (action === "start" && !(await modal.confirm({
       title: "开启局域网接收？",
       content:
-        "接收服务会在本机局域网开放 10 分钟。传输内容（包括你选择的账号凭据）使用 HTTP 明文，仅向可信设备展示二维码；可随时关闭。",
+        "接收服务会在本机局域网开放 10 分钟，期间同一局域网内的设备均可向此网页写入数据。传输使用 HTTP 明文（包括你选择的账号凭据），请仅在可信网络中开启；可随时关闭。",
       okText: "开启接收",
       cancelText: "取消",
     }))) return;
@@ -495,32 +493,18 @@ export function Sync({ active, data, commit, notify }: Props) {
                       </label>
                     )}
                     {receiverAddress ? (
-                      <div className="lan-receiver-qr">
-                        <QRCode
-                          value={JSON.stringify({
-                            type: "simple-live-sync",
-                            version: 1,
-                            host: receiverAddress,
-                            port: receiver.port,
-                            token: receiver.token,
-                            name: "Simple Live Web",
-                          })}
-                          size={224}
-                          bordered={false}
-                        />
-                        <div>
-                          <strong>接收服务已开启</strong>
-                          <span>{receiverAddress}:{receiver.port}</span>
-                          <span>有效至 {new Date(receiver.expiresAt).toLocaleTimeString("zh-CN")}</span>
-                          <span>请用 App 局域网同步页右上角的扫一扫连接</span>
-                        </div>
+                      <div className="lan-receiver-info">
+                        <strong>接收服务已开启</strong>
+                        <span>{receiverAddress}:{receiver.port}</span>
+                        <span>有效至 {new Date(receiver.expiresAt).toLocaleTimeString("zh-CN")}</span>
+                        <span>请在 App 局域网同步页输入以上 IP 和端口连接</span>
                       </div>
                     ) : (
                       <div className="alert error">未检测到局域网 IPv4 地址，请连接 Wi-Fi 或有线网络后重试。</div>
                     )}
                   </>
                 ) : (
-                  <p className="muted">开启后由 App 扫描二维码连接并将所选数据推送到此网页。</p>
+                  <p className="muted">开启后在 App 中输入此网页显示的 IP 和端口，即可将所选数据同步到这里。</p>
                 )}
                 <div className="actions">
                   <Button
@@ -529,7 +513,7 @@ export function Sync({ active, data, commit, notify }: Props) {
                     disabled={!!busy}
                     onClick={() => run(receiver ? "关闭中" : "开启中", () => controlReceiver(receiver ? "stop" : "start"))}
                   >
-                    {receiver ? "关闭接收" : "开启接收并生成二维码"}
+                    {receiver ? "关闭接收" : "开启接收"}
                   </Button>
                 </div>
               </section>

@@ -58,7 +58,7 @@ fvm flutter build apk --release --target-platform android-arm64 --split-per-abi 
 
 ### Web 构建与交付
 
-- 日常 Web 开发使用 `npm.cmd run dev`：前端改动默认依靠 Vite 热更新；只有 Dart 后端、服务配置等改动确实需要重新加载时才重启对应开发服务。平时不运行生产构建；仅当用户明确要求构建 Web 端/正式部署时运行 `npm.cmd run build`，它会执行 TypeScript 检查并生成 `simple_live_web/dist`，不包含后端便携运行环境。
+- 日常 Web 开发使用 `npm.cmd run dev`：前端改动默认依靠 Vite 热更新；只有 Dart 后端、服务配置等改动确实需要重新加载时才重启对应开发服务。用户口中的“构建 Web 端”默认指构建可交付的 Windows 便携压缩包，执行 `npm.cmd run package:windows`；不要把它理解为只生成 `simple_live_web/dist` 的前端构建。只有用户明确说“纯前端构建”“执行 npm build”或明确需要 `dist` 时，才运行 `npm.cmd run build`。
 - 仅在用户明确要求“打包 Web 便携版”或 Windows 发布包时，从 `simple_live_web` 目录运行 `npm.cmd run package:windows`。该脚本会检查 TypeScript、构建前端、校验 QuickJS DLL 与源码版本、编译可移动后端并生成完整 Windows x64 ZIP；不要在此之前单独运行 `npm.cmd run build`，也不要改用手工 Dart 编译流程。
 - Web 源码按需静态检查：前端使用 `npm.cmd run check`；Dart 后端从 `simple_live_web` 目录运行 `dart analyze`。这些是静态检查，不生成 Web 构建产物。仅文档改动只核对文档并提交，不运行构建、启动服务或新增测试。
 - 便携包产物位于 `simple_live_web/release`，包括带版本与 UTC 时间后缀的完整目录和 ZIP。只交付完整 ZIP；不要提交 `dist`、`release`、缓存或个人数据，也不要默认复制到分享目录、推送 Git 或发布 Release。构建成功后报告 ZIP 路径、实际体积、对应源码提交和已完成的检查。
