@@ -1,9 +1,11 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   App as AntApp,
   Button,
   ConfigProvider,
   Input,
+  QRCode,
+  Select,
   Segmented,
   Switch,
   Tabs,
@@ -53,6 +55,13 @@ interface Remote {
   data?: string;
   etag?: string;
 }
+interface LanReceiver {
+  status: boolean;
+  port: number;
+  token: string;
+  addresses: string[];
+  expiresAt: number;
+}
 export function Sync({ active, data, commit, notify }: Props) {
   const { modal } = AntApp.useApp();
   const accounts = useAccounts(active);
@@ -73,10 +82,36 @@ export function Sync({ active, data, commit, notify }: Props) {
   const [status, setStatus] = useState("");
   const [failed, setFailed] = useState(false);
   const [lastSync, setLastSync] = useState("");
+  const [receiver, setReceiver] = useState<LanReceiver | null>(null);
+  const [receiverAddress, setReceiverAddress] = useState("");
   const file = useRef<HTMLInputElement>(null);
   const locked = useRef(false);
   const chosen = Object.values(selection).some(Boolean);
   const selectedAccounts = accountSites.filter((site) => selection[site]);
+
+  useEffect(() => {
+    if (!active || tab !== "device") return;
+    let mounted = true;
+    void api<LanReceiver>("device", {
+      kind: "lan-receiver",
+      action: "status",
+    }).then((current) => {
+      if (!mounted) return;
+      if (!current.status) {
+        setReceiver(null);
+        return;
+      }
+      setReceiver(current);
+      setReceiverAddress((selected) =>
+        current.addresses.includes(selected)
+          ? selected
+          : current.addresses[0] ?? "",
+      );
+    }).catch(() => {
+      if (mounted) setReceiver(null);
+    });
+    return () => { mounted = false; };
+  }, [active, tab]);
 
   async function run(label: string, action: () => Promise<void>) {
     if (locked.current) return;
@@ -117,6 +152,27 @@ export function Sync({ active, data, commit, notify }: Props) {
         : "非空凭据会替换所选平台当前的登录授权；覆盖模式下空凭据也会清除账号。",
       okButtonProps: { danger: true },
     });
+  }
+  async function controlReceiver(action: "start" | "stop") {
+    if (action === "start" && !(await modal.confirm({
+      title: "开启局域网接收？",
+      content:
+        "接收服务会在本机局域网开放 10 分钟。传输内容（包括你选择的账号凭据）使用 HTTP 明文，仅向可信设备展示二维码；可随时关闭。",
+      okText: "开启接收",
+      cancelText: "取消",
+    }))) return;
+    const next = await api<LanReceiver>("device", {
+      kind: "lan-receiver",
+      action,
+    });
+    setReceiver(next.status ? next : null);
+    if (next.status) {
+      setReceiverAddress(next.addresses[0] ?? "");
+      setStatus("局域网接收已开启");
+    } else {
+      setReceiverAddress("");
+      setStatus("局域网接收已关闭");
+    }
   }
   async function archiveCredentials(): Promise<AccountCredentials> {
     if (!selectedAccounts.length) return {};
@@ -280,6 +336,7 @@ export function Sync({ active, data, commit, notify }: Props) {
         <Cloud size={28} className="accent" />
       </div>
       <Tabs
+        className="sync-tabs"
         aria-label="同步方式"
         activeKey={tab}
         onChange={(value) => {
@@ -287,9 +344,9 @@ export function Sync({ active, data, commit, notify }: Props) {
           if (value === "device") setSelection((current) => ({ ...current, douyin: false }));
         }}
         items={[
-          { key: "webdav", label: "WebDAV", icon: <Cloud size={18} />, disabled: !!busy },
-          { key: "device", label: "局域网", icon: <Monitor size={18} />, disabled: !!busy },
-          { key: "file", label: "本地备份", icon: <FolderArchive size={18} />, disabled: !!busy },
+          { key: "webdav", label: <span className="sync-tab-label"><Cloud size={18} />WebDAV</span>, disabled: !!busy },
+          { key: "device", label: <span className="sync-tab-label"><Monitor size={18} />局域网</span>, disabled: !!busy },
+          { key: "file", label: <span className="sync-tab-label"><FolderArchive size={18} />本地备份</span>, disabled: !!busy },
         ]}
       />
       <ConfigProvider componentDisabled={!!busy}>
@@ -408,44 +465,100 @@ export function Sync({ active, data, commit, notify }: Props) {
             </section>
           )}
           {tab === "device" && (
-            <section className="setting-section">
-              <h3>局域网设备</h3>
-              <label className="field">
-                设备 IP 地址
-                <Input
-                  placeholder="192.168.1.100"
-                  value={address}
-                  onChange={(event) => setAddress(event.target.value)}
-                />
-              </label>
-              <div className="actions">
-                <Button
-                  icon={<Link size={16} />}
-                  onClick={() =>
-                    run("连接中", async () => {
-                      const info = await api<{
-                        name: string;
-                        type: string;
-                        version: string;
-                      }>("device", { address: address.trim(), kind: "info" });
-                      setStatus(
-                        `已连接 ${info.name} · ${info.type} · ${info.version}`,
-                      );
-                    })
-                  }
-                >
-                  检查连接
-                </Button>
-                <Button
-                  type="primary"
-                  icon={<Upload size={16} />}
-                  disabled={!!busy || !chosen}
-                  onClick={() => run("推送中", push)}
-                >
-                  推送到设备
-                </Button>
-              </div>
-            </section>
+            <>
+              <section className="setting-section">
+                <h3>从 App 接收</h3>
+                {receiver ? (
+                  <>
+                    {receiver.addresses.length > 1 && (
+                      <label className="field">
+                        选择与 App 同一局域网的地址
+                        <Select
+                          value={receiverAddress || undefined}
+                          options={receiver.addresses.map((ip) => ({ value: ip, label: ip }))}
+                          onChange={setReceiverAddress}
+                          aria-label="选择接收地址"
+                        />
+                      </label>
+                    )}
+                    {receiverAddress ? (
+                      <div className="lan-receiver-qr">
+                        <QRCode
+                          value={JSON.stringify({
+                            type: "simple-live-sync",
+                            version: 1,
+                            host: receiverAddress,
+                            port: receiver.port,
+                            token: receiver.token,
+                            name: "Simple Live Web",
+                          })}
+                          size={224}
+                          bordered={false}
+                        />
+                        <div>
+                          <strong>接收服务已开启</strong>
+                          <span>{receiverAddress}:{receiver.port}</span>
+                          <span>有效至 {new Date(receiver.expiresAt).toLocaleTimeString("zh-CN")}</span>
+                          <span>请用 App 局域网同步页右上角的扫一扫连接</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="alert error">未检测到局域网 IPv4 地址，请连接 Wi-Fi 或有线网络后重试。</div>
+                    )}
+                  </>
+                ) : (
+                  <p className="muted">开启后由 App 扫描二维码连接并将所选数据推送到此网页。</p>
+                )}
+                <div className="actions">
+                  <Button
+                    danger={!!receiver}
+                    type={receiver ? "default" : "primary"}
+                    disabled={!!busy}
+                    onClick={() => run(receiver ? "关闭中" : "开启中", () => controlReceiver(receiver ? "stop" : "start"))}
+                  >
+                    {receiver ? "关闭接收" : "开启接收并生成二维码"}
+                  </Button>
+                </div>
+              </section>
+              <section className="setting-section">
+                <h3>推送到 App</h3>
+                <label className="field">
+                  App 设备 IP 地址
+                  <Input
+                    placeholder="192.168.1.100"
+                    value={address}
+                    onChange={(event) => setAddress(event.target.value)}
+                  />
+                </label>
+                <div className="actions">
+                  <Button
+                    icon={<Link size={16} />}
+                    onClick={() =>
+                      run("连接中", async () => {
+                        const info = await api<{
+                          name: string;
+                          type: string;
+                          version: string;
+                        }>("device", { address: address.trim(), kind: "info" });
+                        setStatus(
+                          `已连接 ${info.name} · ${info.type} · ${info.version}`,
+                        );
+                      })
+                    }
+                  >
+                    检查连接
+                  </Button>
+                  <Button
+                    type="primary"
+                    icon={<Upload size={16} />}
+                    disabled={!!busy || !chosen}
+                    onClick={() => run("推送中", push)}
+                  >
+                    推送到设备
+                  </Button>
+                </div>
+              </section>
+            </>
           )}
           {tab === "file" && (
             <section className="setting-section">

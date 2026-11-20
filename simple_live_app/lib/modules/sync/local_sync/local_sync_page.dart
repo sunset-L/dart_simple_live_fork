@@ -14,10 +14,10 @@ class LocalSyncPage extends GetView<LocalSyncController> {
       appBar: AppBar(
         title: const Text('局域网数据同步'),
         actions: [
-          TextButton.icon(
-            onPressed: controller.showInfo,
-            icon: const Icon(Icons.qr_code),
-            label: const Text("信息"),
+          IconButton(
+            tooltip: '扫描网页端同步二维码',
+            onPressed: controller.scanAndConnect,
+            icon: const Icon(Icons.qr_code_scanner),
           ),
         ],
       ),
@@ -102,6 +102,11 @@ class LocalSyncPage extends GetView<LocalSyncController> {
               color: Colors.grey,
               fontSize: 14,
             ),
+          ),
+          TextButton.icon(
+            onPressed: controller.showInfo,
+            icon: const Icon(Icons.qr_code_2),
+            label: const Text('显示本机连接二维码'),
           ),
         ],
       ),

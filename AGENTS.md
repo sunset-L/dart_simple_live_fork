@@ -20,6 +20,15 @@ The two clients and the console use `simple_live_core` through a relative path d
 - Each project owns its `pubspec.lock`. Keep intentional lockfile changes, but do not regenerate unrelated dependencies.
 - Do not commit generated or local state from `.dart_tool/`, `.fvm/`, `build/`, IDE settings, CocoaPods, or platform ephemeral directories.
 
+### 已确认的本机 Windows 工具链
+
+以下是当前开发电脑已验证可用的路径；仅适用于这台电脑，不要当作其他电脑的固定路径，也不要因此自动下载或安装工具。
+
+- Flutter 3.47.1：`D:\application\flutter-sdk\flutter`；可直接调用 `bin\flutter.bat` 和 `bin\dart.bat`。若当前终端没有 `fvm` 命令，先确认该 SDK 的版本与项目 `.fvmrc` 一致，再使用绝对路径运行；不要为此安装 FVM 或另一份 Flutter。
+- Android SDK：`D:\application\android-sdk`，与 `simple_live_app/android/local.properties` 中的 `sdk.dir` 一致。
+- JDK：`D:\application\jdk-17`（Java 17）。需要时只为当前终端设置 `JAVA_HOME` 并将 `bin` 加入 `PATH`，不要修改系统级环境变量。
+- Android Gradle Plugin 所需的 Gradle 由 `simple_live_app/android/gradle/wrapper/gradle-wrapper.properties` 管理；当前项目 wrapper 使用 Gradle 8.14。优先使用 wrapper，不另装 Gradle。
+
 ## Development conventions
 
 - Follow the existing Dart style and the lints in each project's `analysis_options.yaml`.

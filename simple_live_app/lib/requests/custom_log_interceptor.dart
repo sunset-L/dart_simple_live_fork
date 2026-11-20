@@ -24,7 +24,7 @@ Response Code：${err.response?.statusCode}
 Request URL：${err.requestOptions.uri}
 Request Query：${err.requestOptions.queryParameters}
 Request Data：${err.requestOptions.data}
-Request Headers：${err.requestOptions.headers}
+Request Headers：${_maskHeader(err.requestOptions.headers)}
 Response Headers：${err.response?.headers.map}
 Response Data：${err.response?.data}''', err.stackTrace);
     } else {
@@ -56,7 +56,7 @@ Request Code：${response.statusCode}
 Request URL：${response.requestOptions.uri}
 Request Query：${response.requestOptions.queryParameters}
 Request Data：${response.requestOptions.data}
-Request Headers：${response.requestOptions.headers}
+Request Headers：${_maskHeader(response.requestOptions.headers)}
 Response Headers：${response.headers.map}
 Response Data：${response.data}''',
       );
@@ -73,7 +73,7 @@ Response Data：${response.data}''',
     var result = <String, dynamic>{};
     header.forEach((key, value) {
       var k = key.toLowerCase();
-      if (k == "cookie" || k == "authorization") {
+      if (k == "cookie" || k == "authorization" || k == "x-simple-live-token") {
         result[key] = "******";
       } else {
         result[key] = value;

@@ -878,6 +878,29 @@ nav button.active {
   border-bottom: 1px solid var(--line);
   margin-bottom: 17px;
 }
+.sync-tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  line-height: 1;
+}
+.lan-receiver-qr {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+.lan-receiver-qr > div:last-child {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.lan-receiver-qr strong {
+  color: var(--text);
+  font-size: 15px;
+}
 .sync-tabs button {
   display: inline-flex;
   align-items: center;

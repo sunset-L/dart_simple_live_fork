@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import '../network.dart';
 import '../accounts/account_service.dart';
+import 'lan_receiver.dart';
 
 Future<Map<String, dynamic>> webdav(Map<String, dynamic> body) async {
   final base = Uri.tryParse(body['url'] as String? ?? '');
@@ -119,7 +120,11 @@ void requireSuccess(Response<dynamic> response) {
 Future<Object> device(
   Map<String, dynamic> body,
   AccountService accounts,
+  LanSyncReceiver lanSyncReceiver,
 ) async {
+  if (body['kind'] == 'lan-receiver') {
+    return lanSyncReceiver.control(body);
+  }
   final address = InternetAddress.tryParse(body['address'] as String? ?? '');
   if (address == null || address.type != InternetAddressType.IPv4) {
     throw const FormatException('请输入设备的 IPv4 地址');

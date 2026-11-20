@@ -14,6 +14,7 @@ import 'routes/live_status_routes.dart';
 import 'routes/playback_routes.dart';
 import 'routes/static_routes.dart';
 import 'settings/preferences_service.dart';
+import 'sync/lan_receiver.dart';
 import 'sync/sync_service.dart';
 
 const maxBody = 28 * 1024 * 1024;
@@ -30,6 +31,7 @@ final danmaku = DanmakuService(playback);
 final library = LibraryService();
 final preferences = PreferencesService();
 final liveStatuses = LiveStatusRoutes(sites);
+final lanSyncReceiver = LanSyncReceiver(library, accounts);
 
 Future<void> main() async {
   CoreLog.enableLog = false;
@@ -148,7 +150,7 @@ Future<void> handle(HttpRequest request) async {
           fresh: body['fresh'] == true,
         ),
         '/api/webdav' => await webdav(body),
-        '/api/device' => await device(body, accounts),
+        '/api/device' => await device(body, accounts, lanSyncReceiver),
         _ => throw const FormatException('接口不存在'),
       };
     } else {

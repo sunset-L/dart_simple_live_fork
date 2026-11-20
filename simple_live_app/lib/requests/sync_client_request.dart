@@ -3,6 +3,10 @@ import 'package:simple_live_app/requests/http_client.dart';
 import 'package:simple_live_app/services/sync_service.dart';
 
 class SyncClientRequest {
+  Map<String, String>? _headers(SyncClinet client) => client.syncToken == null
+      ? null
+      : {'x-simple-live-token': client.syncToken!};
+
   Future<SyncClientInfoModel> getClientInfo(SyncClinet client) async {
     var url = "http://${client.address}:${client.port}/info";
     var data = await HttpClient.instance.getJson(url);
@@ -22,6 +26,7 @@ class SyncClientRequest {
       queryParameters: {
         'overlay': overlay ? '1' : '0',
       },
+      header: _headers(client),
     );
 
     if (data["status"]) {
@@ -43,6 +48,7 @@ class SyncClientRequest {
       queryParameters: {
         'overlay': overlay ? '1' : '0',
       },
+      header: _headers(client),
     );
 
     if (data["status"]) {
@@ -64,6 +70,7 @@ class SyncClientRequest {
       queryParameters: {
         'overlay': overlay ? '1' : '0',
       },
+      header: _headers(client),
     );
 
     if (data["status"]) {
@@ -85,6 +92,7 @@ class SyncClientRequest {
       queryParameters: {
         'overlay': overlay ? '1' : '0',
       },
+      header: _headers(client),
     );
 
     if (data["status"]) {
@@ -101,6 +109,7 @@ class SyncClientRequest {
       data: {
         "cookie": cookie,
       },
+      header: _headers(client),
     );
 
     if (data["status"]) {
@@ -117,6 +126,7 @@ class SyncClientRequest {
       data: {
         "auth": auth,
       },
+      header: _headers(client),
     );
 
     if (data["status"]) {

@@ -86,6 +86,14 @@ class SyncDeviceController extends BaseController {
         SmartDialog.showToast("未登录哔哩哔哩");
         return;
       }
+      if (info.type.toLowerCase() == 'web' &&
+          !await Utils.showAlertDialog(
+            '登录凭据会通过局域网 HTTP 明文传输，并保存到网页端本机。只向可信的网页实例同步。',
+            title: '同步哔哩哔哩账号',
+            confirm: '继续同步',
+          )) {
+        return;
+      }
       SmartDialog.showLoading(msg: "同步中...");
 
       await request.syncBiliAccount(
@@ -105,10 +113,17 @@ class SyncDeviceController extends BaseController {
         SmartDialog.showToast("未登录斗鱼");
         return;
       }
+      if (info.type.toLowerCase() == 'web' &&
+          !await Utils.showAlertDialog(
+            '登录凭据会通过局域网 HTTP 明文传输，并保存到网页端本机。只向可信的网页实例同步。',
+            title: '同步斗鱼账号',
+            confirm: '继续同步',
+          )) {
+        return;
+      }
       SmartDialog.showLoading(msg: "同步中...");
 
-      await request.syncDouyuAccount(
-          client, DouyuAccountService.instance.auth);
+      await request.syncDouyuAccount(client, DouyuAccountService.instance.auth);
       SmartDialog.showToast("已同步斗鱼账号");
     } catch (e) {
       SmartDialog.showToast("同步失败:$e");
