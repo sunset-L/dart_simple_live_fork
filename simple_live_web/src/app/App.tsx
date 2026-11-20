@@ -1,15 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { App as AntApp, Button, Input, Tooltip } from "antd";
 import { ArrowLeft, Cloud, Download, RefreshCw, Trash2 } from "lucide-react";
-import { Catalog } from "../features/catalog/Catalog";
-import { Sync } from "../features/sync/Sync";
-import { FollowPage } from "../pages/follow/FollowPage";
-import { Mine } from "../pages/mine/MinePage";
-import { HistoryPage } from "../pages/history/HistoryPage";
-import { Blocked } from "../pages/blocked/BlockedPage";
-import { AccountPage } from "../pages/accounts/AccountPage";
-import { TagDialog } from "../features/follow/TagDialog";
-import { AddFollow } from "../features/follow/AddFollow";
 import { openPlayback, type Page } from "./routes";
 import { Sidebar } from "./Sidebar";
 import { ThemePicker } from "./ThemePicker";
@@ -21,6 +12,51 @@ import {
 const PlaybackPage = lazy(() =>
   import("../pages/playback/PlaybackPage").then((module) => ({
     default: module.PlaybackPage,
+  })),
+);
+const Catalog = lazy(() =>
+  import("../features/catalog/Catalog").then((module) => ({
+    default: module.Catalog,
+  })),
+);
+const FollowPage = lazy(() =>
+  import("../pages/follow/FollowPage").then((module) => ({
+    default: module.FollowPage,
+  })),
+);
+const Mine = lazy(() =>
+  import("../pages/mine/MinePage").then((module) => ({
+    default: module.Mine,
+  })),
+);
+const HistoryPage = lazy(() =>
+  import("../pages/history/HistoryPage").then((module) => ({
+    default: module.HistoryPage,
+  })),
+);
+const Blocked = lazy(() =>
+  import("../pages/blocked/BlockedPage").then((module) => ({
+    default: module.Blocked,
+  })),
+);
+const AccountPage = lazy(() =>
+  import("../pages/accounts/AccountPage").then((module) => ({
+    default: module.AccountPage,
+  })),
+);
+const Sync = lazy(() =>
+  import("../features/sync/Sync").then((module) => ({
+    default: module.Sync,
+  })),
+);
+const TagDialog = lazy(() =>
+  import("../features/follow/TagDialog").then((module) => ({
+    default: module.TagDialog,
+  })),
+);
+const AddFollow = lazy(() =>
+  import("../features/follow/AddFollow").then((module) => ({
+    default: module.AddFollow,
   })),
 );
 import {
@@ -56,6 +92,7 @@ export function App() {
   const { message, modal } = AntApp.useApp();
   const { error: preferencesError } = usePreferences();
   const [page, setPage] = useState<Page>(validPage);
+  const [syncVisited, setSyncVisited] = useState(() => validPage() === "sync");
   const [historyParent, setHistoryParent] = useState<"follow" | "mine">(
     "follow",
   );
@@ -84,7 +121,9 @@ export function App() {
 
   useEffect(() => {
     const onHash = () => {
-      setPage(validPage());
+      const nextPage = validPage();
+      if (nextPage === "sync") setSyncVisited(true);
+      setPage(nextPage);
       setSearch("");
       setQuery("");
     };
@@ -322,125 +361,146 @@ export function App() {
             )}
           </div>
         )}
-        {isCatalog && (
-          <Catalog
-            key={page}
-            site={site}
-            onSite={setSite}
-            search={search}
-            categories={page === "category"}
-            onFollow={toggleFollow}
-            follows={data.follows}
-            onOpenPlayback={(room) => openPlayback(room.siteId, room.roomId)}
-          />
-        )}
-        {page === "follow" && (
-          <FollowPage
-            data={data}
-            following={following}
-            filter={filter}
-            setFilter={setFilter}
-            tag={selectedTag}
-            setTag={setTag}
-            onFollow={toggleFollow}
-            onRemoveHistory={(id) =>
-              change(() =>
-                commit({
-                  ...library.current,
-                  histories: library.current.histories.filter(
-                    (item) => item.id !== id,
-                  ),
-                }),
-              )
-            }
-            onClearHistory={() =>
-              change(async () => {
-                await commit({ ...library.current, histories: [] });
-              })
-            }
-            onAdd={() => setAddFollow(true)}
-            notify={notify}
-            onRemoveTag={(name) =>
-              change(async () => {
-                const current = library.current;
-                await commit({
-                  ...current,
-                  follows: current.follows.map((user) =>
-                    user.tag === name ? { ...user, tag: "全部" } : user,
-                  ),
-                  tags: current.tags.filter((item) => item.tag !== name),
-                });
-                setTag("全部");
-              })
-            }
-            onEdit={setEditing}
-          />
-        )}
-        {page === "mine" && (
-          <Mine onNavigate={go} data={data} theme={theme} setTheme={setTheme} />
-        )}
-        {page === "history" && (
-          <HistoryPage
-            data={data}
-            onFollow={toggleFollow}
-            onRemove={(id) =>
-              change(() =>
-                commit({
-                  ...library.current,
-                  histories: library.current.histories.filter(
-                    (item) => item.id !== id,
-                  ),
-                }),
-              )
-            }
-            onClear={() =>
-              change(async () => {
-                await commit({ ...library.current, histories: [] });
-              })
-            }
-          />
-        )}
-        {page === "blocked" && (
-          <Blocked
-            data={data}
-            commit={(next) => commit(next)}
-            notify={notify}
-          />
-        )}
-        {page === "accounts" && <AccountPage />}
-        <div hidden={page !== "sync"}>
-          <Sync
-            active={page === "sync"}
-            data={data}
-            commit={(next, expected) => commit(next, expected)}
-            notify={notify}
-          />
-        </div>
+        <Suspense
+          fallback={
+            <div className="loading" role="status">
+              <span>正在加载页面</span>
+            </div>
+          }
+        >
+          {isCatalog && (
+            <Catalog
+              key={page}
+              site={site}
+              onSite={setSite}
+              search={search}
+              categories={page === "category"}
+              onFollow={toggleFollow}
+              follows={data.follows}
+              onOpenPlayback={(room) => openPlayback(room.siteId, room.roomId)}
+            />
+          )}
+          {page === "follow" && (
+            <FollowPage
+              data={data}
+              following={following}
+              filter={filter}
+              setFilter={setFilter}
+              tag={selectedTag}
+              setTag={setTag}
+              onFollow={toggleFollow}
+              onRemoveHistory={(id) =>
+                change(() =>
+                  commit({
+                    ...library.current,
+                    histories: library.current.histories.filter(
+                      (item) => item.id !== id,
+                    ),
+                  }),
+                )
+              }
+              onClearHistory={() =>
+                change(async () => {
+                  await commit({ ...library.current, histories: [] });
+                })
+              }
+              onAdd={() => setAddFollow(true)}
+              notify={notify}
+              onRemoveTag={(name) =>
+                change(async () => {
+                  const current = library.current;
+                  await commit({
+                    ...current,
+                    follows: current.follows.map((user) =>
+                      user.tag === name ? { ...user, tag: "全部" } : user,
+                    ),
+                    tags: current.tags.filter((item) => item.tag !== name),
+                  });
+                  setTag("全部");
+                })
+              }
+              onEdit={setEditing}
+            />
+          )}
+          {page === "mine" && (
+            <Mine
+              onNavigate={go}
+              data={data}
+              theme={theme}
+              setTheme={setTheme}
+            />
+          )}
+          {page === "history" && (
+            <HistoryPage
+              data={data}
+              onFollow={toggleFollow}
+              onRemove={(id) =>
+                change(() =>
+                  commit({
+                    ...library.current,
+                    histories: library.current.histories.filter(
+                      (item) => item.id !== id,
+                    ),
+                  }),
+                )
+              }
+              onClear={() =>
+                change(async () => {
+                  await commit({ ...library.current, histories: [] });
+                })
+              }
+            />
+          )}
+          {page === "blocked" && (
+            <Blocked
+              data={data}
+              commit={(next) => commit(next)}
+              notify={notify}
+            />
+          )}
+          {page === "accounts" && <AccountPage />}
+          {syncVisited && (
+            <div hidden={page !== "sync"}>
+              <Suspense fallback={null}>
+                <Sync
+                  active={page === "sync"}
+                  data={data}
+                  commit={(next, expected) => commit(next, expected)}
+                  notify={notify}
+                />
+              </Suspense>
+            </div>
+          )}
+        </Suspense>
       </main>
       {editing && (
-        <TagDialog
-          value={editing}
-          tags={data.tags.map((item) => item.tag)}
-          onClose={() => setEditing(null)}
-          onSave={saveTag}
-        />
+        <Suspense fallback={null}>
+          <TagDialog
+            value={editing}
+            tags={data.tags.map((item) => item.tag)}
+            onClose={() => setEditing(null)}
+            onSave={saveTag}
+          />
+        </Suspense>
       )}
       {addFollow && (
-        <AddFollow
-          onClose={() => setAddFollow(false)}
-          onSave={(user) =>
-            change(async () => {
-              if (library.current.follows.some((item) => item.id === user.id))
-                throw new Error("此主播已经在关注列表中");
-              await commit({
-                ...library.current,
-                follows: [...library.current.follows, user],
-              });
-              setAddFollow(false);
-              void hydrateFollowAvatar(user.siteId, user.roomId);
-            })
-          }
-        />
+        <Suspense fallback={null}>
+          <AddFollow
+            onClose={() => setAddFollow(false)}
+            onSave={(user) =>
+              change(async () => {
+                if (library.current.follows.some((item) => item.id === user.id))
+                  throw new Error("此主播已经在关注列表中");
+                await commit({
+                  ...library.current,
+                  follows: [...library.current.follows, user],
+                });
+                setAddFollow(false);
+                void hydrateFollowAvatar(user.siteId, user.roomId);
+              })
+            }
+          />
+        </Suspense>
       )}
     </div>
   );

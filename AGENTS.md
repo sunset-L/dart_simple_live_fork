@@ -45,12 +45,12 @@ cd simple_live_app && fvm flutter analyze --no-pub
 cd simple_live_tv_app && fvm flutter analyze --no-pub
 ```
 
-从直接修改的项目开始检查。修改 `simple_live_core` 时，同时审查受影响的客户端或控制台调用方。原生平台改动通过代码逻辑审查及必要的构建编译检查，不自动运行原生测试。下方约定的 ARM64 正式包构建与复制交付仍照常执行。
+从直接修改的项目开始检查。修改 `simple_live_core` 时，同时审查受影响的客户端或控制台调用方。原生平台改动通过代码逻辑审查及必要的构建编译检查，不自动运行原生测试。只有本次改动涉及 Android 客户端代码或会影响 Android 客户端的共享代码时，才执行下方 ARM64 正式包构建与复制交付；纯 Web、控制台或其他不影响 Android 客户端的改动不构建 APK。
 
 ## 用户交流与交付约定
 
 - 用户询问、选项、操作说明、进度更新和结果说明优先使用中文；新增或调整的界面文案使用中文，第三方工具的英文输出以中文概述。
-- 本仓库代码修改完成后，默认自动为 `simple_live_app` 构建 64 位 Android 正式安装包（ARM64 / `arm64-v8a`）。
+- 仅当本次改动涉及 `simple_live_app` 的 Android 客户端代码，或修改了会影响该 Android 客户端的共享代码时，才为 `simple_live_app` 构建 64 位 Android 正式安装包（ARM64 / `arm64-v8a`）；纯 Web 等不影响 Android 客户端的改动不构建 APK。
 - 在 `simple_live_app` 目录使用固定版本的 FVM 执行：`fvm flutter build apk --release --target-platform android-arm64 --split-per-abi --no-pub`。依赖发生变化时，先按上面的要求获取依赖并完成代码检查。
 - 构建成功后，将 APK 直接复制到 `D:\本地分享\workspace`，文件名应能识别版本、架构和本次修改内容。
 - 按用户要求，打包后不额外进行 APK 架构、签名、安装或哈希验证；打包前仅完成代码逻辑检查及必要的静态分析，不自动运行测试，App 测试由用户完成。
