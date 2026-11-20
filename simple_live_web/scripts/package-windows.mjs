@@ -104,6 +104,11 @@ try {
   cpSync(join(root, "dist"), join(bundle, "dist"), { recursive: true });
   copyFileSync(runtime, join(bundle, "runtime/dartvm.exe"));
   copyFileSync(join(root, "native/windows-x64/dart_quickjs.dll"), join(bundle, "native/dart_quickjs.dll"));
+  const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe");
+  run(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+    "-File", join(root, "scripts/create-windows-icon.ps1"),
+    "-SourcePng", join(root, "public/assets/logo.png"), "-DestinationIco", join(bundle, "simple-live-web.ico"),
+  ]);
   prepareWindowsServer(root, dart, {
     kernelPath: join(bundle, "server/server.dill"),
     nativeLibraryPath: join(bundle, "native/dart_quickjs.dll"),
@@ -112,6 +117,8 @@ try {
   const bom = "\uFEFF";
   writeFileSync(join(bundle, "scripts/start-windows.ps1"),
     bom + readFileSync(join(root, "scripts/start-windows.ps1"), "utf8").replace(/^\uFEFF/, ""));
+  writeFileSync(join(bundle, "scripts/create-shortcut.ps1"),
+    bom + readFileSync(join(root, "scripts/create-shortcut.ps1"), "utf8").replace(/^\uFEFF/, ""));
   writeFileSync(join(bundle, "start.bat"),
     readFileSync(join(root, "scripts/portable-start.bat"), "utf8").replace(/\r?\n/g, "\r\n"));
   copyFileSync(join(root, "scripts/portable-README.md"), join(bundle, "README.md"));
@@ -135,7 +142,6 @@ try {
   writeFileSync(join(bundle, "portable.json"), JSON.stringify(manifest, null, 2) + "\n");
   const zip = join(release, `${name}.zip`);
   console.log("正在压缩便携 ZIP...");
-  const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe");
   run(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
     "Add-Type -AssemblyName System.IO.Compression.FileSystem; " +
     "[IO.Compression.ZipFile]::CreateFromDirectory($env:SIMPLE_LIVE_PACKAGE_DIRECTORY, $env:SIMPLE_LIVE_PACKAGE_ZIP, [IO.Compression.CompressionLevel]::Optimal, $true)",

@@ -456,6 +456,11 @@ function Start-Portable {
             Write-Host '便携版文件检查通过；未启动服务。' -ForegroundColor Green
             return
         }
+        try {
+            & (Join-Path $PSScriptRoot 'create-shortcut.ps1') -StartBat (Join-Path $root 'start.bat')
+        } catch {
+            Write-Host ('无法更新应用快捷方式，请继续使用 start.bat：' + $_.Exception.Message) -ForegroundColor Yellow
+        }
         $configuredPort = $env:SIMPLE_LIVE_WEB_PORT
         if (-not $configuredPort) { $configuredPort = $env:PORT }
         $port = Select-Port $configuredPort 23236 @()

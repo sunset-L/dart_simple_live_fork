@@ -273,6 +273,8 @@ release/
 - 手动更新时先关闭旧版窗口，再解压新版完整 ZIP 到新目录启动即可；默认数据目录不变。源码开发版 `start.bat` 仍使用 Vite 热更新，便携发布构建不会改变它的启动方式。
 - `start.bat -CheckOnly` 检查核心文件；`start.bat -NoBrowser` 不自动打开浏览器。便携包只支持 Windows 10/11 x64；网页静态资源可离线加载，观看直播仍需联网。
 - `portable.json` 记录版本、源提交、运行时版本和文件摘要；`licenses` 保留第三方许可。后端 kernel 中 QuickJS 使用相对路径，程序目录可移动。ZIP、构建输出和运行缓存不提交 Git。
+- 带应用 logo 的启动入口为 `Simple Live Web.lnk`：便携版第一次正常启动时在自身目录生成，调用同目录 `start.bat`；关闭命令窗口仍会停止服务。移动目录后先运行一次新位置的 `start.bat`，快捷方式的目标和图标路径会自动更新。保留包内的 `simple-live-web.ico`；不会自动往桌面或开始菜单添加快捷方式。创建失败只提示，不阻止启动；`-CheckOnly` 不创建快捷方式。
+- 打包时用 Windows 自带的 PowerShell/System.Drawing 从 `public/assets/logo.png` 生成包含 16/24/32/48/64/128/256 像素的 ICO，不安装图标转换工具或构建工具。`.bat` 的图标由 Windows 文件关联控制，因此不修改系统注册表，使用带独立 logo 的快捷方式。
 
 便携包内的 `README.md` 提供使用、更新和配置说明。不要直接在压缩软件内部运行启动器。
 
