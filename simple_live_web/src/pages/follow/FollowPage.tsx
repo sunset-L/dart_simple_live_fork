@@ -28,6 +28,7 @@ export function FollowPage({
   onEdit,
   onAdd,
   notify,
+  active,
 }: {
   data: Library;
   following: Follow[];
@@ -42,6 +43,7 @@ export function FollowPage({
   onEdit: (item: Follow) => void;
   onAdd: () => void;
   notify: (message: string) => void;
+  active: boolean;
 }) {
   const customTags = data.tags.filter((item) => item.tag !== "全部");
   const tags = [...new Set(["全部", ...customTags.map((item) => item.tag)])];
@@ -51,10 +53,13 @@ export function FollowPage({
   const [historyVisibleCount, setHistoryVisibleCount] = useState(20);
   useEffect(() => setHistoryVisibleCount(20), [data.histories.length]);
   const visibleHistory = history.slice(0, historyVisibleCount);
-  const followStatus = useFollowStatus(data.follows, filter !== "history");
+  const followStatus = useFollowStatus(
+    data.follows,
+    active && filter !== "history",
+  );
   const historyStatus = useFollowStatus(
     visibleHistory,
-    filter === "history",
+    active && filter === "history",
     true,
   );
   const { loading, refresh } =

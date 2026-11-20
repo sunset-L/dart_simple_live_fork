@@ -1,7 +1,8 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { App as AntApp, Button, Input, Tooltip } from "antd";
 import { ArrowLeft, Cloud, Download, RefreshCw, Trash2 } from "lucide-react";
-import { openPlayback, type Page } from "./routes";
+import { get } from "../services/apiClient";
+import { isShortLiveLink, openPlayback, parseLiveLink, type Page } from "./routes";
 import { Sidebar } from "./Sidebar";
 import { ThemePicker } from "./ThemePicker";
 import { useAppearance } from "./AppearanceProvider";
@@ -93,6 +94,9 @@ export function App() {
   const { error: preferencesError } = usePreferences();
   const [page, setPage] = useState<Page>(validPage);
   const [syncVisited, setSyncVisited] = useState(() => validPage() === "sync");
+  const [followVisited, setFollowVisited] = useState(
+    () => validPage() === "follow",
+  );
   const [historyParent, setHistoryParent] = useState<"follow" | "mine">(
     "follow",
   );
@@ -123,6 +127,7 @@ export function App() {
     const onHash = () => {
       const nextPage = validPage();
       if (nextPage === "sync") setSyncVisited(true);
+      if (nextPage === "follow") setFollowVisited(true);
       setPage(nextPage);
       setSearch("");
       setQuery("");
@@ -175,7 +180,36 @@ export function App() {
   function go(next: Page) {
     if (next === "history")
       setHistoryParent(page === "follow" ? "follow" : "mine");
+    if (next === "follow") setFollowVisited(true);
     location.hash = next;
+  }
+  async function handleSearch(value: string) {
+    const input = value.trim();
+    if (!input) {
+      setSearch("");
+      return;
+    }
+    const direct = parseLiveLink(input);
+    if (direct) {
+      setQuery("");
+      setSearch("");
+      openPlayback(direct.site, direct.roomId);
+      return;
+    }
+    const pendingWindow = isShortLiveLink(input)
+      ? window.open("about:blank", "simple-live-link")
+      : null;
+    try {
+      const parsed = await get<{ site: string; roomId: string }>(
+        `parse?${new URLSearchParams({ url: input })}`,
+      );
+      setQuery("");
+      setSearch("");
+      openPlayback(parsed.site, parsed.roomId, pendingWindow);
+    } catch {
+      pendingWindow?.close();
+      setSearch(input);
+    }
   }
   function toggleFollow(room: Room | Follow | History) {
     void change(async () => {
@@ -299,7 +333,7 @@ export function App() {
                 setQuery(event.target.value);
                 if (!event.target.value) setSearch("");
               }}
-              onSearch={(value) => setSearch(value.trim())}
+              onSearch={(value) => void handleSearch(value)}
               placeholder="搜索直播间或主播"
               aria-label="搜索直播间或主播"
             />
@@ -380,7 +414,8 @@ export function App() {
               onOpenPlayback={(room) => openPlayback(room.siteId, room.roomId)}
             />
           )}
-          {page === "follow" && (
+          {followVisited && (
+            <div hidden={page !== "follow"}>
             <FollowPage
               data={data}
               following={following}
@@ -420,7 +455,9 @@ export function App() {
                 })
               }
               onEdit={setEditing}
+              active={page === "follow"}
             />
+            </div>
           )}
           {page === "mine" && (
             <Mine

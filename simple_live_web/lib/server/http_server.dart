@@ -11,6 +11,7 @@ import 'library/library_service.dart';
 import 'playback/playback_service.dart';
 import 'routes/catalog_routes.dart';
 import 'routes/live_status_routes.dart';
+import 'routes/parse_routes.dart';
 import 'routes/playback_routes.dart';
 import 'routes/static_routes.dart';
 import 'settings/preferences_service.dart';
@@ -117,6 +118,8 @@ Future<void> handle(HttpRequest request) async {
       } else if (request.uri.path == '/api/live-status') {
         await accounts.refresh();
         result = await liveStatuses.read(request.uri);
+      } else if (request.uri.path == '/api/parse') {
+        result = await parseLiveLink(request.uri);
       } else if (request.uri.path.startsWith('/api/playback/')) {
         await accounts.refresh();
         result = await playbackRoutes
