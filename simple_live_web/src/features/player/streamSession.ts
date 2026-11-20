@@ -84,6 +84,20 @@ export function createStreamSession(video: HTMLVideoElement, events: Events) {
       try {
         await video.play();
       } catch (error) {
+        if (
+          error instanceof DOMException &&
+          error.name === 'NotAllowedError' &&
+          !stopped &&
+          !idlePaused &&
+          version === generation
+        ) {
+          // Browsers may reject audible autoplay on a fresh page. Use the
+          // permitted fallback, then restore the requested audible state.
+          video.muted = true;
+          await video.play();
+          video.muted = false;
+          if (!video.paused) return;
+        }
         throw error;
       }
     } catch (error) {

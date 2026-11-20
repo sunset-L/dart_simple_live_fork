@@ -110,6 +110,8 @@ export function useFollowStatus(
     return () => {
       controller.abort();
       clearTimeout(animationTimer);
+      running = false;
+      setLoading(false);
     };
   }, [rooms, enabled, version, onlyMissing, fresh]);
   return {
