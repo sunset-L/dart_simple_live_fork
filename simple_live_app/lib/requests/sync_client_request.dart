@@ -9,7 +9,10 @@ class SyncClientRequest {
 
   Future<SyncClientInfoModel> getClientInfo(SyncClinet client) async {
     var url = "http://${client.address}:${client.port}/info";
-    var data = await HttpClient.instance.getJson(url);
+    var data = await HttpClient.instance.getJson(
+      url,
+      timeout: const Duration(seconds: 8),
+    );
 
     return SyncClientInfoModel.fromJson(data);
   }

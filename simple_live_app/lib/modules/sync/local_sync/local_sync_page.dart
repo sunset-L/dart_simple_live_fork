@@ -38,7 +38,7 @@ class LocalSyncPage extends GetView<LocalSyncController> {
                     },
                     decoration: const InputDecoration(
                       labelText: '客户端地址',
-                      hintText: '请输入对方设备上显示的地址',
+                      hintText: '输入设备地址或粘贴网页同步二维码',
                       border: OutlineInputBorder(),
                     ),
                   ),

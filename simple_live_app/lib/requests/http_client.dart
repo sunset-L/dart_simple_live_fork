@@ -64,6 +64,7 @@ class HttpClient {
     Map<String, dynamic>? queryParameters,
     Map<String, dynamic>? header,
     CancelToken? cancel,
+    Duration? timeout,
   }) async {
     try {
       queryParameters ??= {};
@@ -74,6 +75,8 @@ class HttpClient {
         options: Options(
           responseType: ResponseType.json,
           headers: header,
+          connectTimeout: timeout,
+          receiveTimeout: timeout,
         ),
         cancelToken: cancel,
       );
@@ -82,6 +85,10 @@ class HttpClient {
       if (e is DioException && e.type == DioExceptionType.badResponse) {
         throw HttpError(e.message ?? "",
             statusCode: e.response?.statusCode ?? 0);
+      } else if (e is DioException &&
+          (e.type == DioExceptionType.connectionTimeout ||
+              e.type == DioExceptionType.receiveTimeout)) {
+        throw HttpError('连接超时，请检查设备地址、端口和局域网连接');
       } else {
         throw HttpError("发送GET请求失败");
       }

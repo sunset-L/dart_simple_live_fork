@@ -37,25 +37,27 @@ class LocalSyncController extends BaseController {
   SyncClientRequest request = SyncClientRequest();
 
   void connect() async {
-    var address = addressController.text;
+    final address = addressController.text.trim();
     if (address.isEmpty) {
       SmartDialog.showToast("请输入地址");
       return;
     }
-    if (address.startsWith('http')) {
-      var uri = Uri.tryParse(address);
-      if (uri != null) {
-        address = uri.host;
-      }
-    } else if (address.contains(':')) {
-      var parts = address.split(":");
-      address = parts.first;
+
+    final webClient = _parseWebSyncClient(address);
+    if (webClient != null) {
+      connectClient(webClient);
+      return;
+    }
+    final endpoint = _parseLegacyAddress(address);
+    if (endpoint == null) {
+      SmartDialog.showToast('地址格式无效，请输入 IPv4 地址、端口或粘贴网页同步二维码');
+      return;
     }
 
     var client = SyncClinet(
       id: 'manual',
-      address: address,
-      port: SyncService.httpPort,
+      address: endpoint.$1,
+      port: endpoint.$2,
       name: "手动输入",
       type: Platform.operatingSystem,
     );
@@ -71,40 +73,9 @@ class LocalSyncController extends BaseController {
     if (raw == null || raw.trim().isEmpty) return;
 
     final value = raw.trim();
-    Object? decoded;
-    try {
-      decoded = jsonDecode(value);
-    } on FormatException {
-      decoded = null;
-    }
-    if (decoded is Map<String, dynamic> &&
-        decoded['type'] == 'simple-live-sync') {
-      final host = decoded['host'];
-      final port = decoded['port'];
-      final token = decoded['token'];
-      final ip = InternetAddress.tryParse(host is String ? host : '');
-      if (decoded['version'] != 1 ||
-          ip == null ||
-          ip.type != InternetAddressType.IPv4 ||
-          !_isLanAddress(ip) ||
-          port is! int ||
-          port < 1 ||
-          port > 65535 ||
-          token is! String ||
-          !RegExp(r'^[A-Za-z0-9_-]{32}$').hasMatch(token)) {
-        SmartDialog.showToast('网页同步二维码无效或不在局域网内');
-        return;
-      }
-      connectClient(
-        SyncClinet(
-          id: 'web-${ip.address}',
-          address: ip.address,
-          port: port,
-          name: 'Simple Live Web',
-          type: 'web',
-          syncToken: token,
-        ),
-      );
+    final client = _parseWebSyncClient(value);
+    if (client != null) {
+      connectClient(client);
       return;
     }
 
@@ -123,6 +94,42 @@ class LocalSyncController extends BaseController {
         type: Platform.operatingSystem,
       ),
     );
+  }
+
+  SyncClinet? _parseWebSyncClient(String value) {
+    Object? decoded;
+    try {
+      decoded = jsonDecode(value);
+    } on FormatException {
+      return null;
+    }
+    if (decoded is Map<String, dynamic> &&
+        decoded['type'] == 'simple-live-sync') {
+      final host = decoded['host'];
+      final port = decoded['port'];
+      final token = decoded['token'];
+      final ip = InternetAddress.tryParse(host is String ? host : '');
+      if (decoded['version'] != 1 ||
+          ip == null ||
+          ip.type != InternetAddressType.IPv4 ||
+          !_isLanAddress(ip) ||
+          port is! int ||
+          port < 1 ||
+          port > 65535 ||
+          token is! String ||
+          !RegExp(r'^[A-Za-z0-9_-]{32}$').hasMatch(token)) {
+        return null;
+      }
+      return SyncClinet(
+        id: 'web-${ip.address}',
+        address: ip.address,
+        port: port,
+        name: 'Simple Live Web',
+        type: 'web',
+        syncToken: token,
+      );
+    }
+    return null;
   }
 
   bool _isLanAddress(InternetAddress address) {
@@ -161,6 +168,10 @@ class LocalSyncController extends BaseController {
     try {
       SmartDialog.showLoading(msg: "连接中...");
       var info = await request.getClientInfo(client);
+      if (info.type.toLowerCase() == 'web' && client.syncToken == null) {
+        SmartDialog.showToast('网页端需使用局域网同步二维码连接');
+        return;
+      }
       AppNavigator.toSyncDevice(client, info);
     } catch (e) {
       SmartDialog.showToast("连接失败:$e");

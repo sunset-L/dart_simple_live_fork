@@ -165,7 +165,20 @@ export function Sync({ active, data, commit, notify }: Props) {
       kind: "lan-receiver",
       action,
     });
-    setReceiver(next.status ? next : null);
+    if (action === "stop") {
+      setReceiver(null);
+      setReceiverAddress("");
+      setStatus("局域网接收已关闭");
+      return;
+    }
+    if (
+      !next.status ||
+      !Array.isArray(next.addresses) ||
+      next.addresses.length === 0
+    ) {
+      throw new Error("未能获取局域网地址，请检查网络后重试");
+    }
+    setReceiver(next);
     if (next.status) {
       setReceiverAddress(next.addresses[0] ?? "");
       setStatus("局域网接收已开启");
