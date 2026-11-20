@@ -111,7 +111,7 @@ npm run dev -- --port 23236 --strictPort
 
 打开 `http://127.0.0.1:23236`；`/api` 和 `/ws` 转发到本机 Dart 服务。PowerShell 中设置环境变量使用 `$env:PORT='23238'`，其他系统按对应 shell 设置即可。Vite 不指定前端端口时默认 5173，手动服务不指定 `PORT` 时 API 默认 23236。手动模式由各终端独立负责进程，不等同于 BAT 的整组清理；Windows 推荐用 `start.bat`。
 
-开发时无需执行 `npm run build`，前端修改由 Vite 热更新。Dart 服务默认只提供 API，不会因为目录里残留 `dist` 就提供旧网页。
+开发时前端修改默认由 Vite 热更新，不执行 `npm run build`；Dart 后端或服务配置改动只有在确实需要重新加载时才重启对应服务。Dart 服务默认只提供 API，不会因为目录里残留 `dist` 就提供旧网页。
 
 `scripts/serve.mjs` 优先使用 `DART_EXECUTABLE` 指定的 Dart 可执行文件，其次使用仓库 `.task-cache/fvm/versions/3.47.1` 内的 SDK，最后查找 PATH 中的 `dart`。`PORT` 可修改监听端口。服务仅绑定本机 IPv4，不应直接部署到公网或解除来源校验。
 
