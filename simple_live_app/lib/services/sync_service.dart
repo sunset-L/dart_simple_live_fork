@@ -442,13 +442,11 @@ class SyncClinet {
   final String address;
   final int port;
   final String type;
-  final String? syncToken;
   SyncClinet({
     required this.id,
     required this.name,
     required this.address,
     required this.port,
     required this.type,
-    this.syncToken,
   });
 }

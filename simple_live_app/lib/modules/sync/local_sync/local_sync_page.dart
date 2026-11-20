@@ -13,13 +13,6 @@ class LocalSyncPage extends GetView<LocalSyncController> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('局域网数据同步'),
-        actions: [
-          IconButton(
-            tooltip: '扫描网页端同步二维码',
-            onPressed: controller.scanAndConnect,
-            icon: const Icon(Icons.qr_code_scanner),
-          ),
-        ],
       ),
       body: ListView(
         padding: AppStyle.edgeInsetsA12,
@@ -37,8 +30,8 @@ class LocalSyncPage extends GetView<LocalSyncController> {
                       controller.connect();
                     },
                     decoration: const InputDecoration(
-                      labelText: '客户端地址',
-                      hintText: '输入设备地址或粘贴网页同步二维码',
+                      labelText: '设备 IP 和端口',
+                      hintText: '输入 IPv4 地址和端口，例如 192.168.1.10:23239',
                       border: OutlineInputBorder(),
                     ),
                   ),
@@ -96,7 +89,7 @@ class LocalSyncPage extends GetView<LocalSyncController> {
           ),
           AppStyle.vGap12,
           const Text(
-            "如果无法扫描到设备，请手动输入地址",
+            "也可以直接输入对方设备的 IPv4 地址和端口连接",
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Colors.grey,
@@ -105,8 +98,8 @@ class LocalSyncPage extends GetView<LocalSyncController> {
           ),
           TextButton.icon(
             onPressed: controller.showInfo,
-            icon: const Icon(Icons.qr_code_2),
-            label: const Text('显示本机连接二维码'),
+            icon: const Icon(Icons.computer),
+            label: const Text('查看本机连接地址'),
           ),
         ],
       ),

@@ -1,15 +1,11 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
-import 'package:get/get.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 import 'package:simple_live_app/app/app_style.dart';
 import 'package:simple_live_app/app/controller/base_controller.dart';
 import 'package:simple_live_app/app/utils.dart';
-import 'package:simple_live_app/modules/sync/local_sync/qr_scan_page.dart';
 import 'package:simple_live_app/requests/sync_client_request.dart';
 import 'package:simple_live_app/routes/app_navigation.dart';
 
@@ -43,14 +39,9 @@ class LocalSyncController extends BaseController {
       return;
     }
 
-    final webClient = _parseWebSyncClient(address);
-    if (webClient != null) {
-      connectClient(webClient);
-      return;
-    }
     final endpoint = _parseLegacyAddress(address);
     if (endpoint == null) {
-      SmartDialog.showToast('地址格式无效，请输入 IPv4 地址、端口或粘贴网页同步二维码');
+      SmartDialog.showToast('地址格式无效，请输入 IPv4 地址和端口，例如 192.168.1.10:23239');
       return;
     }
 
@@ -62,81 +53,6 @@ class LocalSyncController extends BaseController {
       type: Platform.operatingSystem,
     );
     connectClient(client);
-  }
-
-  Future<void> scanAndConnect() async {
-    if (!Platform.isAndroid && !Platform.isIOS) {
-      SmartDialog.showToast('当前平台不支持摄像头扫码，请手动输入设备地址');
-      return;
-    }
-    final raw = await Get.to<String>(() => const LocalSyncScannerPage());
-    if (raw == null || raw.trim().isEmpty) return;
-
-    final value = raw.trim();
-    final client = _parseWebSyncClient(value);
-    if (client != null) {
-      connectClient(client);
-      return;
-    }
-
-    final legacy = _parseLegacyAddress(value);
-    if (legacy == null) {
-      SmartDialog.showToast('未识别的同步二维码');
-      return;
-    }
-    addressController.text = legacy.$1;
-    connectClient(
-      SyncClinet(
-        id: 'manual',
-        address: legacy.$1,
-        port: legacy.$2,
-        name: '扫码设备',
-        type: Platform.operatingSystem,
-      ),
-    );
-  }
-
-  SyncClinet? _parseWebSyncClient(String value) {
-    Object? decoded;
-    try {
-      decoded = jsonDecode(value);
-    } on FormatException {
-      return null;
-    }
-    if (decoded is Map<String, dynamic> &&
-        decoded['type'] == 'simple-live-sync') {
-      final host = decoded['host'];
-      final port = decoded['port'];
-      final token = decoded['token'];
-      final ip = InternetAddress.tryParse(host is String ? host : '');
-      if (decoded['version'] != 1 ||
-          ip == null ||
-          ip.type != InternetAddressType.IPv4 ||
-          !_isLanAddress(ip) ||
-          port is! int ||
-          port < 1 ||
-          port > 65535 ||
-          token is! String ||
-          !RegExp(r'^[A-Za-z0-9_-]{32}$').hasMatch(token)) {
-        return null;
-      }
-      return SyncClinet(
-        id: 'web-${ip.address}',
-        address: ip.address,
-        port: port,
-        name: 'Simple Live Web',
-        type: 'web',
-        syncToken: token,
-      );
-    }
-    return null;
-  }
-
-  bool _isLanAddress(InternetAddress address) {
-    final octets = address.rawAddress;
-    return octets[0] == 10 ||
-        (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31) ||
-        (octets[0] == 192 && octets[1] == 168);
   }
 
   (String, int)? _parseLegacyAddress(String value) {
@@ -168,10 +84,6 @@ class LocalSyncController extends BaseController {
     try {
       SmartDialog.showLoading(msg: "连接中...");
       var info = await request.getClientInfo(client);
-      if (info.type.toLowerCase() == 'web' && client.syncToken == null) {
-        SmartDialog.showToast('网页端需使用局域网同步二维码连接');
-        return;
-      }
       AppNavigator.toSyncDevice(client, info);
     } catch (e) {
       SmartDialog.showToast("连接失败:$e");
@@ -185,20 +97,6 @@ class LocalSyncController extends BaseController {
       title: '本机信息',
       child: Column(
         children: [
-          Visibility(
-            visible: SyncService.instance.httpRunning.value,
-            child: GestureDetector(
-              onTap: Get.back,
-              child: QrImageView(
-                data: SyncService.instance.ipAddress.value,
-                version: QrVersions.auto,
-                backgroundColor: Colors.white,
-                padding: AppStyle.edgeInsetsA12,
-                size: 200,
-              ),
-            ),
-          ),
-          AppStyle.vGap24,
           Visibility(
             visible: SyncService.instance.httpRunning.value,
             child: Text(
@@ -217,7 +115,7 @@ class LocalSyncController extends BaseController {
           Visibility(
             visible: SyncService.instance.httpRunning.value,
             child: const Text(
-              '请使用其他 Simple Live 客户端扫描上方二维码，建立连接后选择同步内容',
+              '在另一台设备的局域网同步页面输入以上 IP 和端口即可连接',
               textAlign: TextAlign.center,
             ),
           ),
