@@ -239,6 +239,8 @@ npm.cmd run package:windows
 
 打包电脑需要已有 Windows x64、Node.js、完整 Dart SDK、Git 和准备好的项目依赖，并保留完整仓库及相邻的 `simple_live_core`。这是构建环境要求，使用 ZIP 的电脑不需要这些开发工具。
 
+打包时使用 Windows 自带的 PowerShell 和 .NET Framework C# 编译器，从 `public/assets/logo.png` 生成图标并嵌入 `Simple Live Web.exe`。不会安装额外工具，也不会修改系统的 BAT 文件关联。
+
 构建脚本按以下顺序查找 Dart SDK：`DART_EXECUTABLE` 指定路径、仓库 `.task-cache/fvm/versions/3.47.1/bin/cache/dart-sdk/bin/dart.exe`、Web 目录 `.runtime/dart-sdk/bin/dart.exe`、系统 PATH。当前电脑的仓库内 SDK 可直接复用；找不到或 SDK 不完整时明确报错，不自动下载安装。需要指定其他已有 SDK 时，在同一个 PowerShell 窗口执行：
 
 ```powershell
@@ -262,19 +264,18 @@ release/
 
 版本号取自 `simple_live_web/package.json` 的 `version`，时间后缀区分每次构建。只有终端显示打包成功且生成 ZIP 才算完成；失败时可能残留未完成目录，不要将其交付。脚本默认只输出到 `release`，不会自动复制到本地分享目录、推送 Git 或上传发布。
 
-交付完整 ZIP 即可，不要只发 `start.bat`、`server.dill` 或 `dist` 文件夹。上次交付包为约 22.1 MiB ZIP、解压后约 58.6 MiB，后续大小以实际构建输出为准。`release` 已被 Git 忽略，不能把二进制产物、个人配置或运行缓存提交到仓库。
+交付完整 ZIP 即可，不要只发 `Simple Live Web.exe`、`start.bat`、`server.dill` 或 `dist` 文件夹。大小以实际构建输出为准。`release` 已被 Git 忽略，不能把二进制产物、个人配置或运行缓存提交到仓库。
 
 ### 运行和更新
 
-- 完整解压 ZIP 后双击其中的 `start.bat`。随包提供 Dart VM、后端 kernel 和已校验的 QuickJS DLL，接收电脑无需 Node.js、Dart SDK、Git、Visual Studio 或 Windows SDK，首次启动不下载安装资源。
+- 完整解压 ZIP 后直接双击带应用 logo 的 `Simple Live Web.exe`，无需先运行 BAT 或生成快捷方式。随包提供 Dart VM、后端 kernel 和已校验的 QuickJS DLL，接收电脑无需 Node.js、Dart SDK、Git、Visual Studio 或 Windows SDK，首次启动不下载安装资源。
 - 正式版只启动一个本机 Dart 服务，同时托管网页、API 与弹幕连接。默认端口 23236，遇占用自动选择后续空闲端口；服务就绪后由默认浏览器打开实际地址。`SIMPLE_LIVE_WEB_PORT` 优先于 `PORT`。
 - 保留命令窗口显示状态，关闭窗口或按 Ctrl+C 清理本次服务；关闭浏览器不关闭服务。浏览器由系统外壳打开，退出启动器不会关闭用户浏览器。
 - 个人数据沿用 `%APPDATA%\simple-live-web`（或 `SIMPLE_LIVE_DATA_DIR` 指定目录），不会把构建机的账号、Cookie、WebDAV 配置、关注列表打入包中。
 - 手动更新时先关闭旧版窗口，再解压新版完整 ZIP 到新目录启动即可；默认数据目录不变。源码开发版 `start.bat` 仍使用 Vite 热更新，便携发布构建不会改变它的启动方式。
 - `start.bat -CheckOnly` 检查核心文件；`start.bat -NoBrowser` 不自动打开浏览器。便携包只支持 Windows 10/11 x64；网页静态资源可离线加载，观看直播仍需联网。
 - `portable.json` 记录版本、源提交、运行时版本和文件摘要；`licenses` 保留第三方许可。后端 kernel 中 QuickJS 使用相对路径，程序目录可移动。ZIP、构建输出和运行缓存不提交 Git。
-- 带应用 logo 的启动入口为 `Simple Live Web.lnk`：便携版第一次正常启动时在自身目录生成，调用同目录 `start.bat`；关闭命令窗口仍会停止服务。移动目录后先运行一次新位置的 `start.bat`，快捷方式的目标和图标路径会自动更新。保留包内的 `simple-live-web.ico`；不会自动往桌面或开始菜单添加快捷方式。创建失败只提示，不阻止启动；`-CheckOnly` 不创建快捷方式。
-- 打包时用 Windows 自带的 PowerShell/System.Drawing 从 `public/assets/logo.png` 生成包含 16/24/32/48/64/128/256 像素的 ICO，不安装图标转换工具或构建工具。`.bat` 的图标由 Windows 文件关联控制，因此不修改系统注册表，使用带独立 logo 的快捷方式。
+- EXE 从自身所在目录查找启动脚本，移动整个解压目录后可直接启动。不创建桌面或开始菜单快捷方式。`start.bat` 仍可作为命令行和排障入口。
 
 便携包内的 `README.md` 提供使用、更新和配置说明。不要直接在压缩软件内部运行启动器。
 

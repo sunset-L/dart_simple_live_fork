@@ -1,8 +1,6 @@
 # Simple Live Web 便携版
 
-适用于 Windows 10/11 x64。完整解压 ZIP 后双击 `start.bat`，本机服务就绪后会打开默认浏览器。
-
-首次启动还会在当前目录生成带应用 logo 的 **`Simple Live Web.lnk`**，后续直接双击该快捷方式启动。它调用同目录的 `start.bat`，启动行为和关闭窗口停止服务的方式保持一致。目录移动后先运行一次新位置的 `start.bat`，即可更新快捷方式目标和图标位置。请保留同目录的 `simple-live-web.ico`。
+适用于 Windows 10/11 x64。完整解压 ZIP 后，直接双击带应用 logo 的 **`Simple Live Web.exe`**，本机服务就绪后会打开默认浏览器。不需要先运行 BAT 或生成快捷方式；移动整个解压目录后仍可直接启动。
 
 - 所需运行资源已随包提供，不要求安装 Node.js、Dart SDK、Git、Visual Studio、Windows SDK 或浏览器插件；首次启动不下载工具。
 - 默认地址为 `http://127.0.0.1:23236`，端口已占用时自动选择后续空闲端口，以命令窗口显示的实际地址为准。网页、API 和弹幕连接共用一个服务端口。
@@ -27,7 +25,7 @@ call start.bat
 ## 更新
 
 1. 关闭旧版启动窗口，等待旧服务退出。
-2. 下载新版完整 ZIP，解压到新目录并双击 `start.bat`。
+2. 下载新版完整 ZIP，解压到新目录并双击 `Simple Live Web.exe`。
 3. 默认个人数据目录保持不变，新版会读取原有关注和设置。确认可用后可删除旧版程序目录；不删除 `%APPDATA%\simple-live-web`。
 
 也可以关闭旧服务后，用新版完整程序文件覆盖旧目录。自定义数据目录时，新版继续使用相同的 `SIMPLE_LIVE_DATA_DIR`。
@@ -36,7 +34,7 @@ call start.bat
 
 `start.bat -CheckOnly` 仅检查核心随包文件，不启动服务。`start.bat -NoBrowser` 启动服务但不自动打开浏览器。
 
-Windows 的单个 `.bat` 文件不能内嵌独立图标，带 logo 的入口是 `Simple Live Web.lnk`。快捷方式创建失败不影响服务启动，可继续使用 `start.bat`。快捷方式只属于当前解压目录，不会自动写入桌面或开始菜单。
+`start.bat` 也可直接启动服务，作为命令行和排障入口。程序不会自动创建桌面或开始菜单快捷方式。
 
 文件缺失或校验失败时重新解压完整 ZIP；端口耗尽时设置 `SIMPLE_LIVE_WEB_PORT`。权限不足时将程序解压到个人目录。不会自动提权或安装软件。
 

@@ -8,6 +8,7 @@ import {
   readdirSync,
   realpathSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { delimiter, dirname, join, relative, resolve } from "node:path";
@@ -18,6 +19,7 @@ import { prepareWindowsServer } from "./windows-native.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(root, "..");
 const packageInfo = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+const launcherName = "Simple Live Web.exe";
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -48,6 +50,22 @@ function findDart() {
   const dart = candidates.find((path) => path && existsSync(path));
   if (!dart) throw new Error("未找到现有 Dart SDK，请设置 DART_EXECUTABLE；不会下载安装工具");
   return realpathSync(dart);
+}
+
+function buildLauncher(bundle, powershell, csc) {
+  const icon = join(bundle, "simple-live-web.ico");
+  console.log("正在生成带应用图标的 Windows 启动程序...");
+  try {
+    run(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+      "-File", join(root, "scripts/create-windows-icon.ps1"),
+      "-SourcePng", join(root, "public/assets/logo.png"), "-DestinationIco", icon,
+    ]);
+    run(csc, ["/nologo", "/target:exe", "/platform:x64", "/codepage:65001",
+      `/win32icon:${icon}`, `/out:${join(bundle, launcherName)}`, join(root, "scripts/windows-launcher.cs"),
+    ]);
+  } finally {
+    if (existsSync(icon)) unlinkSync(icon);
+  }
 }
 
 function collectLicenses(destination, sdkRoot) {
@@ -90,6 +108,10 @@ try {
   const sdkBin = dirname(dart);
   const runtime = join(sdkBin, "dartvm.exe");
   if (!existsSync(runtime)) throw new Error("Dart SDK 缺少 dartvm.exe，无法创建便携包");
+  const windows = process.env.SystemRoot ?? "C:\\Windows";
+  const powershell = join(windows, "System32/WindowsPowerShell/v1.0/powershell.exe");
+  const csc = join(windows, "Microsoft.NET/Framework64/v4.0.30319/csc.exe");
+  if (!existsSync(csc)) throw new Error("未找到 Windows .NET Framework 自带的 C# 编译器，无法生成便携版启动程序。");
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
   const name = `simple-live-web-${packageInfo.version}-windows-x64-${stamp}`;
   const release = join(root, "release");
@@ -104,11 +126,7 @@ try {
   cpSync(join(root, "dist"), join(bundle, "dist"), { recursive: true });
   copyFileSync(runtime, join(bundle, "runtime/dartvm.exe"));
   copyFileSync(join(root, "native/windows-x64/dart_quickjs.dll"), join(bundle, "native/dart_quickjs.dll"));
-  const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe");
-  run(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-    "-File", join(root, "scripts/create-windows-icon.ps1"),
-    "-SourcePng", join(root, "public/assets/logo.png"), "-DestinationIco", join(bundle, "simple-live-web.ico"),
-  ]);
+  buildLauncher(bundle, powershell, csc);
   prepareWindowsServer(root, dart, {
     kernelPath: join(bundle, "server/server.dill"),
     nativeLibraryPath: join(bundle, "native/dart_quickjs.dll"),
@@ -117,8 +135,6 @@ try {
   const bom = "\uFEFF";
   writeFileSync(join(bundle, "scripts/start-windows.ps1"),
     bom + readFileSync(join(root, "scripts/start-windows.ps1"), "utf8").replace(/^\uFEFF/, ""));
-  writeFileSync(join(bundle, "scripts/create-shortcut.ps1"),
-    bom + readFileSync(join(root, "scripts/create-shortcut.ps1"), "utf8").replace(/^\uFEFF/, ""));
   writeFileSync(join(bundle, "start.bat"),
     readFileSync(join(root, "scripts/portable-start.bat"), "utf8").replace(/\r?\n/g, "\r\n"));
   copyFileSync(join(root, "scripts/portable-README.md"), join(bundle, "README.md"));
@@ -150,7 +166,7 @@ try {
   console.log(`便携目录：${bundle}`);
   console.log(`ZIP：${zip}`);
   console.log(`解压后 ${(rawBytes / 1024 / 1024).toFixed(1)} MiB；ZIP ${(statSync(zip).size / 1024 / 1024).toFixed(1)} MiB`);
-  console.log("解压后双击 start.bat；无需安装工具，关闭命令窗口即停止服务。");
+  console.log(`完整解压后双击 ${launcherName}；无需安装工具，关闭命令窗口即停止服务。`);
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
