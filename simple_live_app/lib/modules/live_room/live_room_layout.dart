@@ -103,7 +103,10 @@ class _LiveRoomLayoutState extends State<LiveRoomLayout>
     return LayoutBuilder(
       builder: (context, constraints) {
         final size = constraints.biggest;
-        final windowLandscape = media.orientation == Orientation.landscape;
+        // MediaQuery 可能仍属于上一次窗口帧；旋转交接使用同一 FlutterView 的
+        // 实际尺寸。键盘只改变 inset，不改变 physicalSize，不能误判为横屏。
+        final windowSize = View.of(context).physicalSize;
+        final windowLandscape = windowSize.width > windowSize.height;
         if (_lastWindowLandscape != windowLandscape) {
           _lastWindowLandscape = windowLandscape;
           WidgetsBinding.instance.addPostFrameCallback((_) {
