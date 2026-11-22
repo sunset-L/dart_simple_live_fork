@@ -68,9 +68,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
           body: LiveRoomLayout(
             fullScreen: controller.fullScreenState.value,
             landscapeFullScreen: controller.fullScreenLandscape,
-            systemFullScreen: controller.systemFullScreen,
             appBar: appBar,
-            onInlineRestored: controller.completeInlineRestore,
             onWindowLandscapeChanged: controller.onWindowLandscapeChanged,
             player: player,
             sidebar: sidebar,
@@ -383,50 +381,62 @@ class LiveRoomPage extends GetView<LiveRoomController> {
             Expanded(
               child: TabBarView(
                 children: [
-                  Obx(
-                    () => Stack(
-                      children: [
-                        ListView.separated(
-                          controller: controller.scrollController,
-                          separatorBuilder: (_, i) => Obx(
-                            () => SizedBox(
-                              // *2与原来的EdgeInsets.symmetric(vertical: )做兼容
-                              height: AppSettingsController
-                                      .instance.chatTextGap.value *
-                                  2,
+                  Builder(builder: (context) {
+                    // 保留 TabController 和 ScrollController，但卸载隐藏列表及其
+                    // Rx 消息订阅；横屏收消息不会再触发列表构建或布局。
+                    if (!TickerMode.valuesOf(context).enabled) {
+                      return const SizedBox.shrink();
+                    }
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (context.mounted) controller.chatScrollToBottom();
+                    });
+                    return Obx(
+                      () => Stack(
+                        children: [
+                          ListView.separated(
+                            key: PageStorageKey(
+                                'chat-${controller.site.id}-${controller.roomId}'),
+                            controller: controller.scrollController,
+                            separatorBuilder: (_, i) => Obx(
+                              () => SizedBox(
+                                // *2与原来的EdgeInsets.symmetric(vertical: )做兼容
+                                height: AppSettingsController
+                                        .instance.chatTextGap.value *
+                                    2,
+                              ),
+                            ),
+                            padding: AppStyle.edgeInsetsA12,
+                            // +1：列表第 0 项固定是「直播间标题」，
+                            // 之后才是弹幕。标题跟着列表一起滚，
+                            // 滚上去之后不再占位，不挤占聊天可视区域。
+                            itemCount: controller.messages.length + 1,
+                            itemBuilder: (_, i) {
+                              if (i == 0) {
+                                return buildRoomTitleHeader();
+                              }
+                              var item = controller.messages[i - 1];
+                              return buildMessageItem(item);
+                            },
+                          ),
+                          Visibility(
+                            visible: controller.disableAutoScroll.value,
+                            child: Positioned(
+                              right: 12,
+                              bottom: 12,
+                              child: ElevatedButton.icon(
+                                onPressed: () {
+                                  controller.disableAutoScroll.value = false;
+                                  controller.chatScrollToBottom();
+                                },
+                                icon: const Icon(Icons.expand_more),
+                                label: const Text("最新"),
+                              ),
                             ),
                           ),
-                          padding: AppStyle.edgeInsetsA12,
-                          // +1：列表第 0 项固定是「直播间标题」，
-                          // 之后才是弹幕。标题跟着列表一起滚，
-                          // 滚上去之后不再占位，不挤占聊天可视区域。
-                          itemCount: controller.messages.length + 1,
-                          itemBuilder: (_, i) {
-                            if (i == 0) {
-                              return buildRoomTitleHeader();
-                            }
-                            var item = controller.messages[i - 1];
-                            return buildMessageItem(item);
-                          },
-                        ),
-                        Visibility(
-                          visible: controller.disableAutoScroll.value,
-                          child: Positioned(
-                            right: 12,
-                            bottom: 12,
-                            child: ElevatedButton.icon(
-                              onPressed: () {
-                                controller.disableAutoScroll.value = false;
-                                controller.chatScrollToBottom();
-                              },
-                              icon: const Icon(Icons.expand_more),
-                              label: const Text("最新"),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                        ],
+                      ),
+                    );
+                  }),
                   if (controller.site.id == Constant.kBiliBili)
                     buildSuperChats(),
                   buildFollowList(),
@@ -587,24 +597,28 @@ class LiveRoomPage extends GetView<LiveRoomController> {
   }
 
   Widget buildSuperChats() {
-    return KeepAliveWrapper(
-      child: Obx(
-        () => ListView.separated(
-          padding: AppStyle.edgeInsetsA12,
-          itemCount: controller.superChats.length,
-          separatorBuilder: (_, i) => AppStyle.vGap12,
-          itemBuilder: (_, i) {
-            var item = controller.superChats[i];
-            return SuperChatCard(
-              item,
-              onExpire: () {
-                controller.removeSuperChats();
-              },
-            );
-          },
+    return Builder(builder: (context) {
+      // 列表卡片自带倒计时 Timer，横屏卸载后随 dispose 取消。
+      if (!TickerMode.valuesOf(context).enabled) return const SizedBox.shrink();
+      return KeepAliveWrapper(
+        child: Obx(
+          () => ListView.separated(
+            padding: AppStyle.edgeInsetsA12,
+            itemCount: controller.superChats.length,
+            separatorBuilder: (_, i) => AppStyle.vGap12,
+            itemBuilder: (_, i) {
+              var item = controller.superChats[i];
+              return SuperChatCard(
+                item,
+                onExpire: () {
+                  controller.removeSuperChats();
+                },
+              );
+            },
+          ),
         ),
-      ),
-    );
+      );
+    });
   }
 
   Widget buildSettings() {

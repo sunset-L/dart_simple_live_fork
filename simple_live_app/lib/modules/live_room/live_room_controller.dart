@@ -384,7 +384,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// 聊天栏始终滚动到底部
   void chatScrollToBottom() {
-    if (scrollController.hasClients) {
+    if (!fullScreenState.value && scrollController.hasClients) {
       // 如果手动上拉过，就不自动滚动到底部
       if (disableAutoScroll.value) {
         return;
@@ -415,9 +415,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
       messages.add(msg);
 
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => chatScrollToBottom(),
-      );
+      // 横屏聊天列表已卸载，不再为每条弹幕安排页面帧和自动滚动。
+      if (!fullScreenState.value) {
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => chatScrollToBottom(),
+        );
+      }
       if (!liveStatus.value || isBackground) {
         return;
       }

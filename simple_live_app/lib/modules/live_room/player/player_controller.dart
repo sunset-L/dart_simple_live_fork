@@ -442,10 +442,16 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   bool _systemFullScreen = false;
 
   bool get fullScreenLandscape => _fullScreenLandscape;
-  bool get systemFullScreen => _systemFullScreen;
+  Completer<void>? _orientationReady;
 
   void onWindowLandscapeChanged(bool landscape) {
     _windowLandscape = landscape;
+    final ready = _orientationReady;
+    if (ready != null &&
+        !ready.isCompleted &&
+        landscape == (fullScreenState.value && _fullScreenLandscape)) {
+      ready.complete();
+    }
     _syncWindowFullScreen();
   }
 
@@ -468,9 +474,10 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     fullScreenState.value = true;
     try {
       // 系统已经横屏，只接管显示，不锁方向，转回竖屏仍由系统决定。
+      await WidgetsBinding.instance.endOfFrame;
+      if (_systemDisposed) return;
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
           overlays: []);
-      await Future<void>.delayed(const Duration(milliseconds: 320));
     } catch (e) {
       Log.logPrint(e);
     } finally {
@@ -498,6 +505,8 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   /// 释放一些系统状态
   Future resetSystem() async {
     _systemDisposed = true;
+    final ready = _orientationReady;
+    if (ready != null && !ready.isCompleted) ready.complete();
     fullScreenTransitioning.value = false;
     await SystemChrome.setEnabledSystemUIMode(
       SystemUiMode.edgeToEdge,
@@ -530,12 +539,12 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     }
     FocusManager.instance.primaryFocus?.unfocus();
     fullScreenTransitioning.value = true;
-    await _syncVideoSize();
-    if (_systemDisposed) return;
-    _fullScreenLandscape = isLandscapeVideo;
-    _systemFullScreen = false;
-    fullScreenState.value = true;
     try {
+      await _syncVideoSize();
+      if (_systemDisposed) return;
+      _fullScreenLandscape = isLandscapeVideo;
+      _systemFullScreen = false;
+      fullScreenState.value = true;
       // 先提交切屏状态，让系统旋转截图和下一次布局使用同一个全屏状态。
       await WidgetsBinding.instance.endOfFrame;
       if (_systemDisposed) return;
@@ -549,10 +558,13 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
       }
       final reached = await _waitForScreenOrientation(_fullScreenLandscape);
       if (!_systemDisposed && !reached) {
-        final size = WidgetsBinding
-            .instance.platformDispatcher.implicitView?.physicalSize;
-        if (size != null) _fullScreenLandscape = size.width > size.height;
-        Log.w("系统未响应全屏方向请求，按实际窗口方向显示");
+        // 请求被拒绝时撤销全屏，不缓存猜测出来的方向或中间尺寸。
+        fullScreenState.value = false;
+        await setAutoOrientation();
+        if (_systemDisposed) return;
+        await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge,
+            overlays: SystemUiOverlay.values);
+        Log.w("系统未响应全屏方向请求，已恢复普通布局");
       }
     } catch (e) {
       Log.logPrint(e);
@@ -565,37 +577,18 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   }
 
   Future<bool> _waitForScreenOrientation(bool landscape) async {
-    final deadline = DateTime.now().add(const Duration(seconds: 2));
-    while (!_systemDisposed && DateTime.now().isBefore(deadline)) {
-      final size =
-          WidgetsBinding.instance.platformDispatcher.implicitView?.physicalSize;
-      if (size == null || (size.width > size.height) == landscape) break;
-      await Future<void>.delayed(const Duration(milliseconds: 16));
-    }
-    // 原生完成窗口 resize 不代表系统截图旋转动画已结束。
-    await Future<void>.delayed(const Duration(milliseconds: 320));
-    final size =
-        WidgetsBinding.instance.platformDispatcher.implicitView?.physicalSize;
-    return size == null || (size.width > size.height) == landscape;
-  }
-
-  /// 竖屏布局恢复后再释放原来的方向策略。
-  Future<void> completeInlineRestore() async {
-    if (_systemDisposed ||
-        !fullScreenTransitioning.value ||
-        fullScreenState.value) {
-      return;
-    }
+    if (_systemDisposed) return false;
+    if (_windowLandscape == landscape) return true;
+    final ready = Completer<void>();
+    _orientationReady = ready;
     try {
-      await setAutoOrientation();
-      if (_systemDisposed) return;
-      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge,
-          overlays: SystemUiOverlay.values);
-    } catch (e) {
-      Log.logPrint(e);
+      // 完成信号来自本帧页面布局，不轮询物理尺寸，也不猜测系统动画时长。
+      await ready.future.timeout(const Duration(seconds: 2));
+      return !_systemDisposed && _windowLandscape == landscape;
+    } on TimeoutException {
+      return false;
     } finally {
-      fullScreenTransitioning.value = false;
-      _syncWindowFullScreen();
+      if (identical(_orientationReady, ready)) _orientationReady = null;
     }
   }
 
@@ -619,15 +612,34 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     final restoreWindow = !_systemFullScreen || _windowLandscape;
     _systemFullScreen = false;
     fullScreenState.value = false;
-    if (restoreWindow) unawaited(_restoreInlineWindow());
-    _syncVideoSize();
+    unawaited(_restoreInlineWindow(restoreWindow));
   }
 
-  Future<void> _restoreInlineWindow() async {
-    // 先让布局进入等待竖屏的状态，再允许原生窗口 resize。
-    await WidgetsBinding.instance.endOfFrame;
-    if (_systemDisposed || fullScreenState.value) return;
-    await nativePlayer.setScreenOrientation("restore");
+  Future<void> _restoreInlineWindow(bool restoreWindow) async {
+    try {
+      await WidgetsBinding.instance.endOfFrame;
+      if (_systemDisposed) return;
+      if (restoreWindow) {
+        // 原生先固定回竖屏，页面已完成竖屏布局后再释放方向策略。
+        await nativePlayer.setScreenOrientation("restore");
+        if (_systemDisposed) return;
+        if (!await _waitForScreenOrientation(false)) {
+          Log.w("系统未响应退出方向请求，按实际窗口布局并释放切屏锁");
+        }
+      }
+      if (_systemDisposed) return;
+      await setAutoOrientation();
+      if (_systemDisposed) return;
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge,
+          overlays: SystemUiOverlay.values);
+    } catch (e) {
+      Log.logPrint(e);
+    } finally {
+      if (!_systemDisposed) {
+        fullScreenTransitioning.value = false;
+        _syncWindowFullScreen();
+      }
+    }
   }
 
   /// 原生明确指定横屏方向，只在真实横向姿态稳定后切换左右横屏。

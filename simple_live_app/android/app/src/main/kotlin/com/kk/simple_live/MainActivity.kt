@@ -1,36 +1,15 @@
 package com.kk.simple_live
 
-import android.content.res.Configuration
 import com.kk.simple_live.player.NativePlayerManager
 import io.flutter.embedding.android.FlutterActivity
-import io.flutter.embedding.android.FlutterTextureView
 import io.flutter.embedding.android.RenderMode
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
 
-    private var surfaceSizeGuard: FlutterSurfaceSizeGuard? = null
-
     // 整页参与窗口合成，避免独立 SurfaceView 在旋转时缩放不同尺寸的旧帧。
     override fun getRenderMode(): RenderMode = RenderMode.texture
-
-    override fun onFlutterTextureViewCreated(flutterTextureView: FlutterTextureView) {
-        super.onFlutterTextureViewCreated(flutterTextureView)
-        surfaceSizeGuard?.release()
-        surfaceSizeGuard = FlutterSurfaceSizeGuard(flutterTextureView)
-    }
-
-    override fun onConfigurationChanged(newConfig: Configuration) {
-        super.onConfigurationChanged(newConfig)
-        surfaceSizeGuard?.requestSync()
-    }
-
-    override fun onDestroy() {
-        surfaceSizeGuard?.release()
-        surfaceSizeGuard = null
-        super.onDestroy()
-    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -94,7 +73,6 @@ class MainActivity : FlutterActivity() {
     /** 用户回到前台：把「按 Home 暂停」的播放恢复起来 */
     override fun onResume() {
         super.onResume()
-        surfaceSizeGuard?.requestSync()
         NativePlayerManager.instance.onUserReturn()
     }
 }
