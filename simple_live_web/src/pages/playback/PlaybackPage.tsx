@@ -37,6 +37,7 @@ import { usePlaybackSession } from "../../features/player/hooks/usePlaybackSessi
 import { useDanmaku } from "../../features/danmaku/useDanmaku";
 import { createFilter } from "../../features/danmaku/filter";
 import { usePlayerSettings } from "../../stores/playerSettings";
+import { refreshAccounts } from "../../stores/accountsStorage";
 import { useLibrary } from "../../stores/useLibrary";
 import { useFollowStatus } from "../../features/follow/useFollowStatus";
 import { FollowStatusLabel } from "../../features/follow/FollowStatusLabel";
@@ -75,6 +76,20 @@ export function PlaybackPage({
     return () => observer.disconnect();
   }, []);
   const session = usePlaybackSession(site, roomId);
+  const authTipShown = useRef(false);
+  useEffect(() => {
+    authTipShown.current = false;
+  }, [site, roomId]);
+  useEffect(() => {
+    if (site !== "douyu" || !session.authWarning || authTipShown.current) return;
+    authTipShown.current = true;
+    void message.warning({
+      key: `douyu-auth-${site}-${roomId}`,
+      content: session.authWarning.message,
+      duration: 6,
+    });
+    void refreshAccounts().catch(() => {});
+  }, [site, roomId, session.authWarning, message]);
   const [paused, setPaused] = useState(true);
   const chat = useDanmaku(site, roomId, session.detail?.status === true, paused);
   const { data, update } = useLibrary();

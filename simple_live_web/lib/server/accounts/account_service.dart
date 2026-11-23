@@ -155,6 +155,16 @@ class AccountService {
     return _summary();
   }
 
+  Future<bool> markDouyuInvalid(String credential) async {
+    await refresh();
+    // 旧取流结果不能覆盖用户刚替换的授权；未登录时保留账号页的未登录状态。
+    if (_data['douyu'] != credential) return false;
+    if (credential.isNotEmpty) {
+      _states['douyu'] = {'state': 'invalid', 'message': '授权已失效，请重新登录'};
+    }
+    return true;
+  }
+
   void _expect(Object? revision) {
     if (revision != _revision) throw LibraryConflict();
   }

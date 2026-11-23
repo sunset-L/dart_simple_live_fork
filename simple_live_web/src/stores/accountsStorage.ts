@@ -49,7 +49,12 @@ function subscribe(listener: () => void) {
 export function useAccounts(enabled = true) {
   const result = useSyncExternalStore(subscribe, () => cached);
   useEffect(() => {
-    if (enabled && !cached.data) void refreshAccounts().catch(() => {});
+    if (!enabled) return;
+    const refresh = () => void refreshAccounts().catch(() => {});
+    // 直播页可能在另一标签页标记授权失效，返回账号页时读取最新状态。
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
   }, [enabled]);
   return result;
 }

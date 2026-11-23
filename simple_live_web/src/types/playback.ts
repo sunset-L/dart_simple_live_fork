@@ -29,11 +29,16 @@ export interface Source {
   format: PlaybackFormat;
   direct: boolean;
 }
+export interface PlaybackAuthWarning {
+  code: "douyu_auth_not_effective";
+  message: string;
+}
 export interface PlaybackSession {
   detail: RoomDetail;
   qualities: Quality[];
   quality: Quality | null;
   sources: Source[];
+  authWarning?: PlaybackAuthWarning;
 }
 export interface DanmakuMessage {
   id?: number;

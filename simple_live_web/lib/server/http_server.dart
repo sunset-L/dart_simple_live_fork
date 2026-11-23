@@ -27,7 +27,7 @@ final sites = <String, LiveSite>{
 };
 final playback = PlaybackService(sites);
 final accounts = AccountService(sites, playback.invalidate);
-final playbackRoutes = PlaybackRoutes(playback);
+final playbackRoutes = PlaybackRoutes(playback, accounts);
 final danmaku = DanmakuService(playback);
 final library = LibraryService();
 final preferences = PreferencesService();
