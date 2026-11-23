@@ -1,7 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:simple_live_core/simple_live_core.dart';
+
+import '../network.dart';
 
 Future<Object> readCatalogApi(Uri uri, Map<String, LiveSite> sites) async {
   final q = uri.queryParameters;
@@ -46,7 +49,9 @@ Future<Object> readCatalogApi(Uri uri, Map<String, LiveSite> sites) async {
     hasMore = result.hasMore;
   } else if (uri.path == '/api/rooms') {
     final category = q['category'];
-    final result = category == null
+    final result = site.id == 'douyu'
+        ? await _readDouyuRooms(category, page)
+        : category == null
         ? await site.getRecommendRooms(page: page)
         : await site.getCategoryRooms(
             LiveSubCategory(
@@ -76,6 +81,54 @@ Future<Object> readCatalogApi(Uri uri, Map<String, LiveSite> sites) async {
         )
         .toList(),
   };
+}
+
+Future<LiveCategoryResult> _readDouyuRooms(String? category, int page) async {
+  final url = category == null
+      ? 'https://www.douyu.com/japi/weblist/apinc/allpage/6/$page'
+      : 'https://www.douyu.com/gapi/rkc/directory/mixList/2_${Uri.encodeComponent(category)}/$page';
+  final response = await network.get<dynamic>(
+    url,
+    options: Options(
+      responseType: ResponseType.json,
+      followRedirects: true,
+      validateStatus: (status) =>
+          status != null && status >= 200 && status < 300,
+      headers: {
+        'referer': 'https://www.douyu.com/',
+        'user-agent': DouyuSite.kUserAgent,
+      },
+    ),
+  );
+  final result = response.data;
+  final data = result is Map ? result['data'] : null;
+  if (data is! Map || data['rl'] is! List) {
+    throw const HttpException('斗鱼直播列表返回了无效数据，请重试');
+  }
+  final rawItems = data['rl'] as List;
+  final items = <LiveRoomItem>[];
+  for (final item in rawItems) {
+    if (item is! Map) {
+      throw const HttpException('斗鱼直播列表返回了无效数据，请重试');
+    }
+    if (item['type'] != 1) continue;
+    items.add(
+      LiveRoomItem(
+        cover: item['rs16'].toString(),
+        online: int.tryParse('${item['ol']}') ?? 0,
+        roomId: item['rid'].toString(),
+        title: item['rn'].toString(),
+        userName: item['nn'].toString(),
+      ),
+    );
+  }
+  final pageCount = int.tryParse('${data['pgcnt']}');
+  // 斗鱼热门列表会在仍有下一页时返回 pgcnt=0，不能将它视为结束。
+  // 使用过滤前的列表判断，避免只有非直播条目的页面提前终止分页。
+  final hasMore =
+      rawItems.isNotEmpty &&
+      (pageCount == null || pageCount <= 0 || page < pageCount);
+  return LiveCategoryResult(hasMore: hasMore, items: items);
 }
 
 Map<String, dynamic> decodeJsonMap(String body) {
