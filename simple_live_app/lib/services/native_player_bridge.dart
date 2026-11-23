@@ -286,6 +286,7 @@ class NativePlayerBridge {
 
   static const MethodChannel _method =
       MethodChannel("simple_live/native_player");
+  static const MethodChannel _activity = MethodChannel("simple_live/activity");
   static const EventChannel _event =
       EventChannel("simple_live/native_player/events");
 
@@ -430,6 +431,12 @@ class NativePlayerBridge {
     } catch (_) {
       // 旧原生实现没有这个方法时静默忽略
     }
+  }
+
+  /// 仅隐藏或显示系统栏，不切换窗口的 edge-to-edge 布局策略。
+  /// 与方向请求分开，系统自动横屏时也能全屏而不锁定方向。
+  Future<void> setSystemBarsHidden(bool hidden) async {
+    await _activity.invokeMethod<void>("setPlayerSystemBarsHidden", hidden);
   }
 
   /// 播放器全屏方向控制

@@ -1,15 +1,18 @@
 package com.kk.simple_live
 
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.kk.simple_live.player.NativePlayerManager
 import io.flutter.embedding.android.FlutterActivity
-import io.flutter.embedding.android.RenderMode
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
 
-    // 整页参与窗口合成，避免独立 SurfaceView 在旋转时缩放不同尺寸的旧帧。
-    override fun getRenderMode(): RenderMode = RenderMode.texture
+    // 保留 Flutter 默认的 SurfaceView，让系统同步窗口与渲染表面的尺寸交接。
+    // 视频仍是 Flutter 外部纹理，不需要把整页 UI 再放进 TextureView。
+    private var playerSystemBarsHidden = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -27,9 +30,40 @@ class MainActivity : FlutterActivity() {
                     NativePlayerManager.instance.attach(this, flutterEngine)
                     result.success(true)
                 }
+                "setPlayerSystemBarsHidden" -> {
+                    val hidden = call.arguments as? Boolean
+                    if (hidden == null) {
+                        result.error("INVALID_ARGUMENT", "系统栏隐藏状态必须为布尔值", null)
+                    } else {
+                        playerSystemBarsHidden = hidden
+                        applyPlayerSystemBars()
+                        result.success(null)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
+    }
+
+    private fun applyPlayerSystemBars() {
+        // 全屏只改变系统栏可见性，始终保持 edge-to-edge。
+        // 不能切到旧式 SystemUiMode.manual：那会先把 decorFitsSystemWindows
+        // 改回 true，在旋转期间额外改变 Flutter 窗口和渲染表面的尺寸。
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        if (playerSystemBarsHidden) {
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    override fun onPostResume() {
+        super.onPostResume()
+        // Flutter 会在此时重应用系统栏配置；全屏回前台后补回隐藏状态。
+        if (playerSystemBarsHidden) applyPlayerSystemBars()
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {

@@ -3,26 +3,44 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:simple_live_app/modules/live_room/live_room_layout.dart';
 
 const _playerKey = ValueKey('player');
+const _headerKey = ValueKey('header');
 const _sidebarKey = ValueKey('sidebar');
 const _portraitActionsKey = ValueKey('portrait-actions');
+const _portrait = Size(360, 800);
+const _landscape = Size(800, 360);
 
 Widget _page({
   required bool fullScreen,
+  bool landscapeFullScreen = true,
   required Widget player,
   required Widget sidebar,
+  ValueChanged<bool>? onWindowLandscapeChanged,
+  MediaQueryData? media,
+  Size? layoutSize,
 }) {
   return MaterialApp(
     home: Scaffold(
-      appBar: fullScreen ? null : AppBar(title: const Text('直播间')),
-      body: LiveRoomLayout(
-        fullScreen: fullScreen,
-        player: player,
-        sidebar: sidebar,
-        portraitActions: const SizedBox(
-          key: _portraitActionsKey,
-          height: 48,
-        ),
-      ),
+      body: Builder(builder: (context) {
+        Widget page = LiveRoomLayout(
+          fullScreen: fullScreen,
+          landscapeFullScreen: landscapeFullScreen,
+          appBar: AppBar(key: _headerKey, title: const Text('直播间')),
+          onWindowLandscapeChanged: onWindowLandscapeChanged,
+          player: player,
+          sidebar: sidebar,
+          portraitActions: const SizedBox(
+            key: _portraitActionsKey,
+            height: 48,
+          ),
+        );
+        if (layoutSize != null) {
+          page = Align(
+            alignment: Alignment.topLeft,
+            child: SizedBox.fromSize(size: layoutSize, child: page),
+          );
+        }
+        return media == null ? page : MediaQuery(data: media, child: page);
+      }),
     ),
   );
 }
@@ -36,7 +54,7 @@ void main() {
   testWidgets('反复切换全屏及旋转保留播放器和聊天标签状态', (tester) async {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    _setSize(tester, const Size(360, 800));
+    _setSize(tester, _portrait);
     var created = 0;
     var disposed = 0;
     final player = _PlayerProbe(
@@ -75,19 +93,19 @@ void main() {
     );
     expect(tabController.index, 1);
 
-    for (var i = 0; i < 3; i++) {
-      _setSize(tester, const Size(800, 360));
+    for (var i = 0; i < 10; i++) {
+      _setSize(tester, _landscape);
       await tester.pumpWidget(
         _page(fullScreen: true, player: player, sidebar: sidebar),
       );
       await tester.pump();
-      expect(tester.getSize(find.byKey(_playerKey)), const Size(800, 360));
+      expect(tester.getSize(find.byKey(_playerKey)), _landscape);
       expect(find.byKey(_sidebarKey), findsNothing);
       expect(find.byKey(_sidebarKey, skipOffstage: false), findsOneWidget);
       expect(tabController.index, 1);
       expect(tester.takeException(), isNull);
 
-      _setSize(tester, const Size(360, 800));
+      _setSize(tester, _portrait);
       await tester.pumpWidget(
         _page(fullScreen: false, player: player, sidebar: sidebar),
       );
@@ -103,10 +121,10 @@ void main() {
     expect(disposed, 1);
   });
 
-  testWidgets('首次自动全屏正常布局，隐藏的聊天区和操作栏不能获得焦点', (tester) async {
+  testWidgets('竖屏内容全屏时隐藏聊天和操作栏并释放焦点', (tester) async {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    _setSize(tester, const Size(360, 800));
+    _setSize(tester, _portrait);
     final focus = FocusNode();
     addTearDown(focus.dispose);
     const player = ColoredBox(key: _playerKey, color: Colors.black);
@@ -117,24 +135,123 @@ void main() {
         TextField(focusNode: focus),
       ],
     );
-    await tester.pumpWidget(
-      _page(fullScreen: true, player: player, sidebar: sidebar),
-    );
-    expect(tester.getSize(find.byKey(_playerKey)), const Size(360, 800));
+    Widget page(bool fullScreen) => _page(
+          fullScreen: fullScreen,
+          landscapeFullScreen: false,
+          player: player,
+          sidebar: sidebar,
+        );
+    await tester.pumpWidget(page(true));
+    expect(tester.getSize(find.byKey(_playerKey)), _portrait);
     expect(find.byType(TextField), findsNothing);
     expect(find.byKey(_portraitActionsKey), findsNothing);
     expect(tester.takeException(), isNull);
-    await tester.pumpWidget(
-      _page(fullScreen: false, player: player, sidebar: sidebar),
-    );
+    await tester.pumpWidget(page(false));
     focus.requestFocus();
     await tester.pump();
     expect(focus.hasFocus, isTrue);
-    await tester.pumpWidget(
-      _page(fullScreen: true, player: player, sidebar: sidebar),
-    );
+    await tester.pumpWidget(page(true));
     await tester.pump();
     expect(focus.hasFocus, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('方向请求先到时保留旧方向布局直到窗口尺寸实际改变', (tester) async {
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const player = ColoredBox(key: _playerKey, color: Colors.black);
+    Widget page(bool fullScreen) => _page(
+          fullScreen: fullScreen,
+          player: player,
+          sidebar: const SizedBox.expand(key: _sidebarKey),
+        );
+    _setSize(tester, _portrait);
+    await tester.pumpWidget(page(false));
+    final inlineRect = tester.getRect(find.byKey(_playerKey));
+    await tester.pumpWidget(page(true));
+    expect(tester.getRect(find.byKey(_playerKey)), inlineRect);
+    expect(find.byKey(_headerKey), findsOneWidget);
+    _setSize(tester, _landscape);
+    await tester.pump();
+    expect(tester.getSize(find.byKey(_playerKey)), _landscape);
+    expect(find.byKey(_headerKey), findsNothing);
+    await tester.pumpWidget(page(false));
+    expect(tester.getSize(find.byKey(_playerKey)), _landscape);
+    expect(find.byKey(_headerKey), findsNothing);
+    _setSize(tester, _portrait);
+    await tester.pump();
+    expect(tester.getRect(find.byKey(_playerKey)), inlineRect);
+    expect(find.byKey(_headerKey), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('MediaQuery和约束先后变化时按约束显示且只在一致后完成交接', (tester) async {
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    _setSize(tester, const Size(900, 900));
+    final directions = <bool>[];
+    Future<void> page(Size mediaSize, Size layoutSize) => tester.pumpWidget(
+          _page(
+            fullScreen: false,
+            player: const ColoredBox(key: _playerKey, color: Colors.black),
+            sidebar: const SizedBox.expand(key: _sidebarKey),
+            onWindowLandscapeChanged: directions.add,
+            media: MediaQueryData(size: mediaSize),
+            layoutSize: layoutSize,
+          ),
+        );
+
+    await page(_portrait, _portrait);
+    expect(directions, [false]);
+    // MediaQuery先转横屏，当前仍是竖屏约束。
+    await page(_landscape, _portrait);
+    expect(find.byKey(_headerKey), findsOneWidget);
+    expect(tester.getSize(find.byKey(_playerKey)), const Size(360, 202.5));
+    expect(directions, [false]);
+    await page(_landscape, _landscape);
+    expect(directions, [false, true]);
+    // MediaQuery先转竖屏，不能在旧横屏约束里闪回竖屏页。
+    await page(_portrait, _landscape);
+    expect(find.byKey(_headerKey), findsNothing);
+    expect(tester.getSize(find.byKey(_playerKey)), _landscape);
+    expect(directions, [false, true]);
+    await page(_portrait, _portrait);
+    expect(directions, [false, true, false]);
+    // 反过来，约束先变时也应立即使用实际布局，不提前完成方向交接。
+    await page(_portrait, _landscape);
+    expect(find.byKey(_headerKey), findsNothing);
+    expect(tester.getSize(find.byKey(_playerKey)), _landscape);
+    expect(directions, [false, true, false]);
+    await page(_landscape, _landscape);
+    await page(_landscape, _portrait);
+    expect(find.byKey(_headerKey), findsOneWidget);
+    expect(tester.getSize(find.byKey(_playerKey)), const Size(360, 202.5));
+    expect(directions, [false, true, false, true]);
+    await page(_portrait, _portrait);
+    expect(directions, [false, true, false, true, false]);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('竖屏键盘压缩高度不能被误判成横屏全屏', (tester) async {
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    _setSize(tester, _portrait);
+    final directions = <bool>[];
+    await tester.pumpWidget(_page(
+      fullScreen: false,
+      player: const ColoredBox(key: _playerKey, color: Colors.black),
+      sidebar: const SizedBox.expand(key: _sidebarKey),
+      onWindowLandscapeChanged: directions.add,
+      media: const MediaQueryData(
+        size: _portrait,
+        viewInsets: EdgeInsets.only(bottom: 560),
+      ),
+      layoutSize: const Size(360, 240),
+    ));
+    expect(find.byKey(_headerKey), findsOneWidget);
+    expect(find.byKey(_portraitActionsKey), findsOneWidget);
+    expect(tester.getSize(find.byKey(_playerKey)).height, lessThan(240));
+    expect(directions, [false]);
     expect(tester.takeException(), isNull);
   });
 }

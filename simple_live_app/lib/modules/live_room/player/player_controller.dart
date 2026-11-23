@@ -476,8 +476,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
       // 系统已经横屏，只接管显示，不锁方向，转回竖屏仍由系统决定。
       await WidgetsBinding.instance.endOfFrame;
       if (_systemDisposed) return;
-      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
-          overlays: []);
+      await nativePlayer.setSystemBarsHidden(true);
     } catch (e) {
       Log.logPrint(e);
     } finally {
@@ -502,16 +501,22 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     }
   }
 
+  Future<void> _restoreSystemBars() async {
+    try {
+      await nativePlayer.setSystemBarsHidden(false);
+    } catch (e) {
+      // Activity/引擎已销毁时仍须释放方向、保亮和播放器状态。
+      Log.logPrint(e);
+    }
+  }
+
   /// 释放一些系统状态
   Future resetSystem() async {
     _systemDisposed = true;
     final ready = _orientationReady;
     if (ready != null && !ready.isCompleted) ready.complete();
     fullScreenTransitioning.value = false;
-    await SystemChrome.setEnabledSystemUIMode(
-      SystemUiMode.edgeToEdge,
-      overlays: SystemUiOverlay.values,
-    );
+    await _restoreSystemBars();
 
     await setAutoOrientation();
     try {
@@ -530,10 +535,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
         fullScreenTransitioning.value) {
       return;
     }
-    final windowSize =
-        WidgetsBinding.instance.platformDispatcher.implicitView?.physicalSize;
-    if (windowSize != null && windowSize.width > windowSize.height) {
-      _windowLandscape = true;
+    if (_windowLandscape) {
       await _enterSystemFullScreen();
       return;
     }
@@ -545,11 +547,10 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
       _fullScreenLandscape = isLandscapeVideo;
       _systemFullScreen = false;
       fullScreenState.value = true;
-      // 先提交切屏状态，让系统旋转截图和下一次布局使用同一个全屏状态。
+      // 先提交页面状态；系统栏仅改变可见性，不在旋转前额外改变窗口布局。
       await WidgetsBinding.instance.endOfFrame;
       if (_systemDisposed) return;
-      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
-          overlays: []);
+      await nativePlayer.setSystemBarsHidden(true);
       if (_systemDisposed) return;
       if (_fullScreenLandscape) {
         await setLandscapeOrientation();
@@ -562,12 +563,16 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
         fullScreenState.value = false;
         await setAutoOrientation();
         if (_systemDisposed) return;
-        await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge,
-            overlays: SystemUiOverlay.values);
+        await _restoreSystemBars();
         Log.w("系统未响应全屏方向请求，已恢复普通布局");
       }
     } catch (e) {
       Log.logPrint(e);
+      if (!_systemDisposed) {
+        fullScreenState.value = false;
+        await setAutoOrientation();
+        if (!_systemDisposed) await _restoreSystemBars();
+      }
     } finally {
       if (!_systemDisposed) {
         fullScreenTransitioning.value = false;
@@ -630,8 +635,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
       if (_systemDisposed) return;
       await setAutoOrientation();
       if (_systemDisposed) return;
-      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge,
-          overlays: SystemUiOverlay.values);
+      await _restoreSystemBars();
     } catch (e) {
       Log.logPrint(e);
     } finally {

@@ -47,9 +47,11 @@ class _LiveRoomLayoutState extends State<LiveRoomLayout> {
           }
         });
       }
-      // 点击横屏全屏但窗口仍竖屏时，继续显示竖屏页；退出时反之。
-      // 不能让全屏请求提前把旧方向的页面放进新方向的播放器约束。
-      final fullScreen = windowLandscape && layoutLandscape ||
+      // 显示按当前约束决定，方向完成信号才要求 MediaQuery 与约束一致。
+      // 两者可能先后更新，不能因 MediaQuery 提前转竖屏而在横屏尺寸里
+      // 闪回竖屏页；键盘压缩高度也不能误判成横屏。
+      final fullScreen = layoutLandscape &&
+              (windowLandscape || media.viewInsets.bottom == 0) ||
           widget.fullScreen && !widget.landscapeFullScreen;
 
       Widget pageContent(Widget child) => Offstage(
