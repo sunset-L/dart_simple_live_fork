@@ -1,6 +1,7 @@
 import { get } from "./apiClient";
 import type {
   DanmakuEvent,
+  PlaybackAuthWarning,
   PlaybackSession,
   Quality,
   RoomDetail,
@@ -36,7 +37,11 @@ export const playbackApi = {
     quality: Quality,
     signal?: AbortSignal,
   ) =>
-    get<{ quality: string; items: Source[] }>(
+    get<{
+      quality: string;
+      items: Source[];
+      authWarning?: PlaybackAuthWarning;
+    }>(
       `playback/source?${new URLSearchParams({ site, roomId, qualityName: quality.quality, sort: String(quality.sort) })}`,
       signal,
     ),

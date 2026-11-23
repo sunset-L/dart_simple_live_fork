@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { playbackApi } from "../../../services/playbackApi";
-import type { Quality, RoomDetail, Source } from "../../../types/playback";
+import type {
+  PlaybackAuthWarning,
+  Quality,
+  RoomDetail,
+  Source,
+} from "../../../types/playback";
 
 export function usePlaybackSession(site: string, roomId: string) {
   const [detail, setDetail] = useState<RoomDetail | null>(null);
@@ -11,6 +16,11 @@ export function usePlaybackSession(site: string, roomId: string) {
   const [loading, setLoading] = useState(true);
   const [switching, setSwitching] = useState(false);
   const [error, setError] = useState("");
+  const [authNotice, setAuthNotice] = useState<{
+    site: string;
+    roomId: string;
+    warning: PlaybackAuthWarning;
+  } | null>(null);
   const [reload, setReload] = useState(0);
   const request = useRef<AbortController | null>(null);
   const selected = useRef<Quality | null>(null);
@@ -55,6 +65,11 @@ export function usePlaybackSession(site: string, roomId: string) {
         remember(result.sources, selectedQuality);
         setQuality(selectedQuality);
         setSources(result.sources);
+        setAuthNotice(
+          result.authWarning
+            ? { site, roomId, warning: result.authWarning }
+            : null,
+        );
         setSource(desired ?? result.sources[0] ?? null);
       } catch (reason) {
         if (!controller.signal.aborted)
@@ -99,6 +114,11 @@ export function usePlaybackSession(site: string, roomId: string) {
         remember(result.sources, next);
         setQuality(next);
         setSources(result.sources);
+        setAuthNotice(
+          result.authWarning
+            ? { site, roomId, warning: result.authWarning }
+            : null,
+        );
         const previous = line.current;
         setSource(
           result.sources.find(
@@ -137,6 +157,10 @@ export function usePlaybackSession(site: string, roomId: string) {
     loading,
     switching,
     error,
+    authWarning:
+      authNotice?.site === site && authNotice.roomId === roomId
+        ? authNotice.warning
+        : null,
     choose,
     confirm: (playing: Source) => {
       const selection = selections.current.get(playing);
