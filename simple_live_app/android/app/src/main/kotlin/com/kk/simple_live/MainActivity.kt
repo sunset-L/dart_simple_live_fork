@@ -28,16 +28,26 @@ class MainActivity : FlutterActivity() {
         )
         fun host(): NativePlayerHost = playerHost ?: NativePlayerHost(
             this,
+            flutterEngine.renderer,
             onBars = { hidden -> playerSystemBarsHidden = hidden; applyPlayerSystemBars() },
             onAction = { action, value ->
                 channel.invokeMethod("playerPageAction", mapOf("action" to action, "value" to value))
             },
         ).also { playerHost = it }
+        NativePlayerManager.instance.onPrepareFloatingReturn = { host().prepareEntry() }
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "attachPlayer" -> {
                     NativePlayerManager.instance.attach(this, flutterEngine)
                     result.success(true)
+                }
+                "preparePlayerEntry" -> {
+                    host().prepareEntry()
+                    result.success(null)
+                }
+                "cancelPlayerEntry" -> {
+                    playerHost?.cancelEntry()
+                    result.success(null)
                 }
                 "closePlayerPage" -> {
                     host().close(result)
@@ -100,6 +110,11 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        playerHost?.onConfigurationChanged(newConfig)
+    }
+
     override fun onPostResume() {
         super.onPostResume()
         // Flutter 会在此时重应用系统栏配置；全屏回前台后补回隐藏状态。
@@ -138,17 +153,20 @@ class MainActivity : FlutterActivity() {
     override fun onPause() {
         super.onPause()
         NativePlayerManager.instance.onBackground()
+        playerHost?.onBackground()
     }
 
     /** 用户主动离开（按 Home 键 / 最近任务键），也接一次 */
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         NativePlayerManager.instance.onBackground()
+        playerHost?.onBackground()
     }
 
     /** 用户回到前台：把「按 Home 暂停」的播放恢复起来 */
     override fun onResume() {
         super.onResume()
         NativePlayerManager.instance.onUserReturn()
+        playerHost?.onForeground()
     }
 }

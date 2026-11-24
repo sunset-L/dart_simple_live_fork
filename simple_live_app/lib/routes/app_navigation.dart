@@ -10,6 +10,7 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/sync_client_info_model.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
+import 'package:simple_live_app/services/native_player_bridge.dart';
 import 'package:simple_live_app/services/sync_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
@@ -55,13 +56,22 @@ class AppNavigator {
       }
     }
 
-    Get.toNamed(
-      RoutePath.kLiveRoomDetail,
-      arguments: site,
-      parameters: {
-        "roomId": roomId,
-      },
-    );
+    try {
+      if (Platform.isAndroid) {
+        await NativePlayerBridge.instance.preparePlayerEntry();
+      }
+      await Get.toNamed(
+        RoutePath.kLiveRoomDetail,
+        arguments: site,
+        parameters: {
+          "roomId": roomId,
+        },
+      );
+    } finally {
+      if (Platform.isAndroid) {
+        await NativePlayerBridge.instance.cancelPlayerEntry();
+      }
+    }
   }
 
   /// 跳转至哔哩哔哩登录

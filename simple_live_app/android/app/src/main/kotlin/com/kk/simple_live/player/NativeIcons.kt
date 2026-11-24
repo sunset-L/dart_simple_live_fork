@@ -44,6 +44,7 @@ object NativeIcons {
                 "radioChecked" -> Pair(material, 0xe503)
                 "radioUnchecked" -> Pair(material, 0xe504)
                 "back" -> Pair(material, 0xe092)
+                "arrowDown" -> Pair(material, 0xe097)
                 "play" -> Pair(material, 0xe4cb)
                 "pause" -> Pair(material, 0xe47c)
                 "refresh" -> Pair(remix, 0xf064)
@@ -72,9 +73,9 @@ object NativeIcons {
                 "timer" -> Pair(material, 0xf44a)
                 "volume" -> Pair(material, 0xe6c5)
                 "brightness" -> Pair(material, 0xe10a)
+                "copy" -> Pair(material, 0xe190)
                 "link" -> Pair(material, 0xe380)
                 "openApp" -> Pair(material, 0xe45c)
-                "camera" -> Pair(material, 0xef1e)
                 "aspect" -> Pair(material, 0xee94)
                 else -> Pair(material, 0xe5d3)
         }

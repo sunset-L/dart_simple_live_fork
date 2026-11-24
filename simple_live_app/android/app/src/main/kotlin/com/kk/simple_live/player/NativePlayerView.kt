@@ -15,7 +15,6 @@ import android.widget.ImageButton
 import android.text.TextUtils
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -26,21 +25,21 @@ class NativePlayerView(
     private val player: ExoPlayer,
     private val onAction: (String, Any?) -> Unit,
 ) : FrameLayout(activity) {
-    private var forcedAspect = 0f
-    val video = object : PlayerView(activity) {
-        override fun onContentAspectRatioChanged(frame: AspectRatioFrameLayout?, ratio: Float) {
-            super.onContentAspectRatioChanged(frame, if (forcedAspect > 0f) forcedAspect else ratio)
-        }
-    }.apply {
-        useController = false
-        isClickable = false
-        isFocusable = false
-        setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
-        setKeepContentOnPlayerReset(true)
+    val video = android.view.LayoutInflater.from(activity)
+        .inflate(com.kk.simple_live.R.layout.native_player_video, this, false) as NativeVideoView
+    private val heldFrame = android.widget.ImageView(activity).apply {
+        scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+        visibility = GONE
     }
+    fun holdFrame(bitmap: android.graphics.Bitmap?) {
+        heldFrame.setImageBitmap(bitmap)
+        heldFrame.visibility = if (bitmap == null) GONE else VISIBLE
+    }
+    fun captureFrame(): android.graphics.Bitmap? =
+        (video.videoSurfaceView as? android.view.TextureView)?.bitmap
     private val loading = NativePlayerLoading(activity).apply { visibility = GONE }
     private val danmaku = DanmakuOverlayView(activity)
-    private val topBar = LinearLayout(activity)
+    private val topBar = LinearLayout(activity).apply { visibility = GONE }
     private val bottomBar = LinearLayout(activity)
     private var floating: ImageButton? = null
     private val subtitle = TextView(activity)
@@ -59,7 +58,7 @@ class NativePlayerView(
     private val superChat = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
     private val seenSC = linkedSetOf<String>()
     private val scTimers = mutableMapOf<String, Runnable>()
-    private val lock = icon("unlock", "锁定控件") { setLocked(!locked) }
+    private val lock = icon("unlock", "锁定控件") { setLocked(!locked) }.apply { visibility = GONE }
     private val danmakuButton = icon("danmaku", "弹幕开关") {
         onAction("danmaku", if (data["danmakuEnabled"] == true) 0 else 1)
     }
@@ -74,7 +73,17 @@ class NativePlayerView(
     private var gestureVolume = 0
     private var gestureBrightness = 0.5f
     private var dragging = false
+    private var gestureActive = false
+    private var gestureHeight = 0
+    private var gestureOnVolume = false
+    private var roomBrightness: Float? = null
     private val playerListener = object : Player.Listener {
+        override fun onRenderedFirstFrame() {
+            postOnAnimation {
+                // 小窗的首帧不能清掉仍遮住完整播放页的交接帧。
+                if (video.player === player) holdFrame(null)
+            }
+        }
         override fun onEvents(player: Player, events: Player.Events) {
             updateLoading()
         }
@@ -83,6 +92,7 @@ class NativePlayerView(
     init {
         setBackgroundColor(Color.BLACK)
         addView(video, LayoutParams(-1, -1))
+        addView(heldFrame, LayoutParams(-1, -1))
         addView(danmaku, LayoutParams(-1, -1))
         addView(loading, LayoutParams(dp(36), dp(36), Gravity.CENTER))
         addView(superChat, LayoutParams(dp(240), -2, Gravity.START or Gravity.BOTTOM).apply {
@@ -112,10 +122,6 @@ class NativePlayerView(
             topBar.addView(it, LinearLayout.LayoutParams(dp(44), dp(44))) }
         topBar.addView(icon("more", "播放设置") { showSettings() }, LinearLayout.LayoutParams(dp(44), dp(44)))
         addView(topBar, LayoutParams(-1, dp(64), Gravity.TOP))
-        runCatching {
-            val bitmap = activity.assets.open("flutter_assets/assets/icons/icon_danmaku_setting.png").use { android.graphics.BitmapFactory.decodeStream(it) }
-            danmakuSettings.setImageDrawable(android.graphics.drawable.BitmapDrawable(resources, bitmap).apply { setTint(Color.WHITE) })
-        }
         bottomBar.gravity = Gravity.CENTER_VERTICAL
         bottomBar.background = android.graphics.drawable.GradientDrawable(
             android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
@@ -149,6 +155,7 @@ class NativePlayerView(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
+        if (w != oldw || h != oldh) cancelGesture()
         val wide = fullscreen && w > dp(560)
         durationText.visibility = if (wide) VISIBLE else GONE
         info.visibility = if (wide) VISIBLE else GONE
@@ -187,12 +194,14 @@ class NativePlayerView(
         }
 
     fun setFullscreen(value: Boolean) {
+        cancelGesture()
         fullscreen = value
         locked = false
         expand.setImageDrawable(NativeIcons.drawable(if (value) "collapse" else "fullscreen"))
         expand.contentDescription = if (value) "退出全屏" else "全屏"
-        lock.setImageDrawable(NativeIcons.drawable("lock"))
-        setControlsVisible(true)
+        lock.setImageDrawable(NativeIcons.drawable("unlock"))
+        lock.contentDescription = "锁定控件"
+        setControlsVisible(true, animate = false)
         danmaku.visibility = if (value && data["danmakuEnabled"] == true) VISIBLE else GONE
         qualityChip.visibility = if (value) VISIBLE else GONE
         danmakuSettings.visibility = VISIBLE
@@ -213,9 +222,15 @@ class NativePlayerView(
         setControlsVisible(!locked)
     }
 
-    private fun setControlsVisible(visible: Boolean) {
+    private fun setControlsVisible(visible: Boolean, animate: Boolean = true) {
         fun slide(view: View, shown: Boolean, x: Float = 0f, y: Float = 0f) {
-            view.animate().cancel()
+            view.animate().withEndAction(null).cancel()
+            // 初始化/已隐藏的控件不能为了播放“退出动画”而先变成可见。
+            if (!animate || !isLaidOut || (!shown && view.visibility != VISIBLE)) {
+                view.visibility = if (shown) VISIBLE else GONE
+                view.translationX = 0f; view.translationY = 0f
+                return
+            }
             if (shown && view.visibility != VISIBLE) { view.translationX = x; view.translationY = y }
             view.visibility = VISIBLE
             view.animate().translationX(if (shown) 0f else x).translationY(if (shown) 0f else y)
@@ -249,18 +264,7 @@ class NativePlayerView(
         floating?.visibility = if (values["floatingEnabled"] == true) VISIBLE else GONE
         danmakuButton.setImageDrawable(NativeIcons.drawable(if (values["danmakuEnabled"] == true) "danmaku" else "danmakuOff"))
         val mode = (values["scaleMode"] as? Number)?.toInt() ?: 0
-        video.resizeMode = when (mode) {
-            1 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-            2 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-            else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-        }
-        // Media3 按 SAR 后的视频尺寸处理 FIT。固定比例模式只调整原生视频容器。
-        val ratio = when (mode) { 3 -> 16f / 9f; 4 -> 4f / 3f; else -> 0f }
-        forcedAspect = ratio
-        video.findViewById<AspectRatioFrameLayout>(androidx.media3.ui.R.id.exo_content_frame)
-            ?.setAspectRatio(if (ratio > 0f) ratio else player.videoSize.let {
-                if (it.height > 0) it.width * it.pixelWidthHeightRatio / it.height else 0f
-            })
+        video.setScaleMode(mode)
         danmaku.visibility = if (fullscreen && values["danmakuEnabled"] == true) VISIBLE else GONE
         if (danmaku.visibility == GONE) danmaku.clearAll()
         updateSuperChat(values)
@@ -272,8 +276,8 @@ class NativePlayerView(
     }
 
     private fun updateLoading() {
-        val active = player.mediaItemCount > 0
-        loading.visibility = if (player.playbackState == Player.STATE_BUFFERING || (!active && data["status"]?.toString()?.startsWith("正在加载") == true)) VISIBLE else GONE
+        val preparing = data["preparingPlayback"] == true
+        loading.visibility = if (data["playbackSuspended"] != true && status.text.isEmpty() && (preparing || player.playbackState == Player.STATE_BUFFERING)) VISIBLE else GONE
     }
 
     private fun updateSuperChat(values: Map<*, *>) {
@@ -395,10 +399,31 @@ class NativePlayerView(
             }
         })
 
+    private fun cancelGesture() {
+        tip.visibility = GONE
+        // 构造时 setFullscreen 也会走到这里，此时还未创建 GestureDetector。
+        if (!gestureActive && !dragging) return
+        gestureActive = false; dragging = false
+        val cancel = MotionEvent.obtain(0, 0, MotionEvent.ACTION_CANCEL, 0f, 0f, 0)
+        detector.onTouchEvent(cancel); cancel.recycle()
+    }
+
+    override fun onConfigurationChanged(config: android.content.res.Configuration) {
+        super.onConfigurationChanged(config)
+        cancelGesture()
+        // 窗口级亮度跟随房间，而不是跟随横竖屏；音量以系统当前值为准，不回放快照。
+        roomBrightness?.let { value ->
+            activity.window.attributes = activity.window.attributes.apply { screenBrightness = value }
+        }
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (locked) return true
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                gestureActive = true
+                gestureHeight = height
+                gestureOnVolume = event.x >= width / 2f
                 gestureX = event.x
                 gestureY = event.y
                 gestureVolume = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
@@ -407,6 +432,7 @@ class NativePlayerView(
                 dragging = false
             }
             MotionEvent.ACTION_MOVE -> {
+                if (!gestureActive) return true
                 val dy = gestureY - event.y
                 if (!dragging && abs(dy) > dp(12) && abs(dy) > abs(event.x - gestureX)) {
                     dragging = true
@@ -416,14 +442,17 @@ class NativePlayerView(
                     cancel.recycle()
                     removeCallbacks(hideControls)
                 }
-                if (dragging && height > 0) {
-                    if (gestureX >= width / 2f) {
+                if (dragging && gestureHeight > 0) {
+                    if (gestureOnVolume) {
                         val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                        val value = (gestureVolume + dy / height * max * 2).roundToInt().coerceIn(0, max)
-                        audio.setStreamVolume(AudioManager.STREAM_MUSIC, value, 0)
+                        val value = (gestureVolume + dy / gestureHeight * max * 2).roundToInt().coerceIn(0, max)
+                        if (audio.getStreamVolume(AudioManager.STREAM_MUSIC) != value) {
+                            audio.setStreamVolume(AudioManager.STREAM_MUSIC, value, 0)
+                        }
                         tip.text = "音量 ${if (max > 0) value * 100 / max else 0}%"
                     } else {
-                        val value = (gestureBrightness + dy / height * 2).coerceIn(.01f, 1f)
+                        val value = (gestureBrightness + dy / gestureHeight * 2).coerceIn(.01f, 1f)
+                        roomBrightness = value
                         activity.window.attributes = activity.window.attributes.apply { screenBrightness = value }
                         tip.text = "亮度 ${(value * 100).roundToInt()}%"
                     }
@@ -431,6 +460,8 @@ class NativePlayerView(
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (!gestureActive) return true
+                gestureActive = false
                 tip.visibility = GONE
                 scheduleHide()
                 if (dragging) { dragging = false; return true }
@@ -440,7 +471,17 @@ class NativePlayerView(
         return true
     }
 
+    fun suspendPlaybackUi() {
+        cancelGesture()
+        stopMetrics()
+        clearSuperChat()
+        danmaku.clearAll()
+        loading.visibility = GONE
+        removeCallbacks(hideControls)
+    }
+
     fun dispose() {
+        holdFrame(null)
         stopMetrics()
         clearSuperChat()
         removeCallbacks(hideControls)

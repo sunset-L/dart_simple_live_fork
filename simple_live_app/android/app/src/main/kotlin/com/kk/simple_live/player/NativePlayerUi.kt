@@ -7,6 +7,7 @@ import android.graphics.Typeface
 import android.view.*
 import android.view.animation.DecelerateInterpolator
 import android.widget.*
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -38,6 +39,7 @@ class NativePlayerStyle(val context: Context, private val data: Map<*, *>) {
 class NativePlayerPager(context: Context) : ViewGroup(context) {
     var index = 0; private set
     var onSelected: (Int) -> Unit = {}
+    var onScrollPosition: (Float) -> Unit = {}
     var onPanelDrag: ((Float, Float?) -> Unit)? = null
     private var downX = 0f
     private var downY = 0f
@@ -49,14 +51,18 @@ class NativePlayerPager(context: Context) : ViewGroup(context) {
     private var velocity: VelocityTracker? = null
     private var animation: ValueAnimator? = null
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
+    private fun applyOffset() {
+        scrollTo(offset.roundToInt(), 0)
+        onScrollPosition(if (width > 0) offset / width else index.toFloat())
+    }
     fun select(value: Int, animate: Boolean = true) {
         val target = value.coerceIn(0, (childCount - 1).coerceAtLeast(0))
         index = target; onSelected(target)
         animation?.cancel()
-        if (!animate || width == 0) { offset = target * width.toFloat(); scrollTo(offset.roundToInt(), 0); return }
+        if (!animate || width == 0) { offset = target * width.toFloat(); applyOffset(); return }
         animation = ValueAnimator.ofFloat(offset, target * width.toFloat()).apply {
             duration = 220; interpolator = DecelerateInterpolator()
-            addUpdateListener { offset = it.animatedValue as Float; scrollTo(offset.roundToInt(), 0) }
+            addUpdateListener { offset = it.animatedValue as Float; applyOffset() }
             start()
         }
     }
@@ -67,7 +73,7 @@ class NativePlayerPager(context: Context) : ViewGroup(context) {
     }
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         for (i in 0 until childCount) getChildAt(i).layout(i * width, 0, (i + 1) * width, height)
-        if (changed && !dragging) { animation?.cancel(); offset = index * width.toFloat(); scrollTo(offset.roundToInt(), 0) }
+        if (changed && !dragging) { animation?.cancel(); offset = index * width.toFloat(); applyOffset() }
     }
     override fun onInterceptTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
@@ -90,7 +96,7 @@ class NativePlayerPager(context: Context) : ViewGroup(context) {
                 panelOffset = if (fromFirst && raw < 0 && onPanelDrag != null) -raw else 0f
                 if (onPanelDrag != null) onPanelDrag?.invoke(panelOffset, null)
                 offset = raw.coerceIn(0f, ((childCount - 1) * width).coerceAtLeast(0).toFloat())
-                scrollTo(offset.roundToInt(), 0)
+                applyOffset()
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 dragging = false
@@ -206,16 +212,16 @@ class NativePlayerAction(context: Context) : LinearLayout(context) {
 }
 
 /** 旧播放器 36dp、2.5dp 细线圆环，隐藏/卸载时停止动画。 */
-class NativePlayerLoading(context: Context) : View(context) {
+class NativePlayerLoading(context: Context, color: Int = Color.WHITE) : View(context) {
     private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE; style = android.graphics.Paint.Style.STROKE
+        this.color = color; style = android.graphics.Paint.Style.STROKE
         strokeWidth = 2.5f * resources.displayMetrics.density; strokeCap = android.graphics.Paint.Cap.ROUND
     }
     private var angle = 0f
     private val animation = ValueAnimator.ofFloat(0f, 360f).apply {
         duration = 1333; repeatCount = ValueAnimator.INFINITE
         interpolator = android.view.animation.LinearInterpolator()
-        addUpdateListener { angle = it.animatedValue as Float; invalidate() }
+        addUpdateListener { angle = (it.animatedValue as Float) % 360f; invalidate() }
     }
     override fun onDraw(canvas: android.graphics.Canvas) {
         val inset = paint.strokeWidth / 2
@@ -223,7 +229,13 @@ class NativePlayerLoading(context: Context) : View(context) {
     }
     override fun onVisibilityAggregated(visible: Boolean) {
         super.onVisibilityAggregated(visible)
-        if (visible && isAttachedToWindow) { if (!animation.isStarted) animation.start() } else animation.cancel()
+        if (visible && isAttachedToWindow) {
+            if (!animation.isStarted) {
+                // 隐藏/重挂只暂停旋转，继续上次角度，不从零再转一遍。
+                animation.setFloatValues(angle, angle + 360f)
+                animation.start()
+            }
+        } else animation.cancel()
     }
     override fun onDetachedFromWindow() { animation.cancel(); super.onDetachedFromWindow() }
 }
@@ -242,5 +254,54 @@ class NativePlayerSlider(context: Context, style: NativePlayerStyle) : SeekBar(c
         thumbOffset = style.dp(10); splitTrack = false; background = null
         minHeight = style.dp(4); maxHeight = style.dp(4)
         setPadding(style.dp(24), 0, style.dp(24), 0)
+    }
+}
+
+/** 使用标准下拉进度、回弹和刷新动画；方向锁只负责让出横向分页手势。 */
+class NativePlayerRefresh(context: Context, val list: ListView, style: NativePlayerStyle,
+    refresh: () -> Unit) : SwipeRefreshLayout(context) {
+    private var downX = 0f
+    private var downY = 0f
+    private var horizontal = false
+    private val slop = ViewConfiguration.get(context).scaledTouchSlop
+    init {
+        addView(list, LayoutParams(-1, -1))
+        setColorSchemeColors(style.primary)
+        setProgressBackgroundColorSchemeColor(style.surface)
+        setOnChildScrollUpCallback { _, _ -> list.canScrollVertically(-1) }
+        setOnRefreshListener { refresh() }
+    }
+    override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = event.x; downY = event.y; horizontal = false
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val dx = abs(event.x - downX); val dy = abs(event.y - downY)
+                if (dx > slop && dx > dy) horizontal = true
+                if (horizontal) return false
+            }
+        }
+        val intercept = super.onInterceptTouchEvent(event)
+        if (intercept) parent?.requestDisallowInterceptTouchEvent(true)
+        return intercept
+    }
+}
+
+/** 输入能力仍由 EditText 提供，外观不继承 Activity/OEM 的下划线和黄色选择高亮。 */
+class NativePlayerInput(context: Context, style: NativePlayerStyle) : EditText(context) {
+    init {
+        setTextColor(style.foreground); setHintTextColor(Color.GRAY)
+        highlightColor = Color.TRANSPARENT
+        background = NativeIcons.background(style.background, style.dp(8).toFloat())
+        setPadding(style.dp(16), style.dp(12), style.dp(16), style.dp(12))
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            textCursorDrawable = NativeIcons.background(style.primary).apply { setSize(style.dp(2), style.dp(24)) }
+            fun handle() = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.OVAL
+                setColor(style.primary); setSize(style.dp(16), style.dp(16))
+            }
+            setTextSelectHandle(handle()); setTextSelectHandleLeft(handle()); setTextSelectHandleRight(handle())
+        }
     }
 }

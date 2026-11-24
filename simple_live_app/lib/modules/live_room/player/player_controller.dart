@@ -254,6 +254,8 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     }
   }
 
+  void onNativePageOpenFailed(Object error) {}
+
   void initSystem() async {
     _activeSession = _session;
     nativePlayer.onPageAction = onNativePageAction;
@@ -279,6 +281,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
       if (!_systemDisposed && s.autoFullScreen.value) await enterFullScreen();
     } catch (e) {
       Log.logPrint(e);
+      if (!_systemDisposed) onNativePageOpenFailed(e);
     }
   }
 
@@ -338,13 +341,6 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
       if (!_systemDisposed) fullScreenTransitioning.value = false;
     }
   }
-
-  /// 保存截图
-  ///
-  /// 截图尚未提供，避免使用已经删除的 Flutter 纹理截图路径。
-  Future saveScreenshot() async {
-    nativePlayer.showPlayerToast("当前版本暂不支持截图");
-  }
 }
 
 class PlayerController extends BaseController
@@ -375,6 +371,8 @@ class PlayerController extends BaseController
   /// 由直播页确认实际加载的线路，并在持续播放后重置恢复计数。
   void onPlaybackPlayingChanged(bool playing) {}
 
+  bool get allowPlaybackWakelock => true;
+
   void initStream() {
     _playerEventSubscription = nativePlayer.events.listen((event) {
       switch (event.type) {
@@ -383,7 +381,7 @@ class PlayerController extends BaseController
           break;
         case NativePlayerEventType.playing:
           onPlaybackPlayingChanged(event.boolValue == true);
-          if (event.boolValue == true) {
+          if (event.boolValue == true && allowPlaybackWakelock) {
             WakelockPlus.enable();
             _stalledCount = 0;
           }
@@ -481,8 +479,18 @@ class PlayerController extends BaseController
   }
 
   /// 显示播放信息
-  void showDebugInfo() {
-    unawaited(nativePlayer.showPlayerDialog('metrics'));
+  Future<void> showDebugInfo() async {
+    try {
+      // 小窗接管时旧 Dart URL 可能为空，读取 ExoPlayer 实际加载的地址。
+      final url = await nativePlayer.getCurrentUrl() ?? '';
+      if (_systemDisposed) return;
+      currentPlayUrl.value = url;
+      await nativePlayer.showPlayerDialog('playbackInfo', {
+        'url': url,
+      });
+    } catch (e) {
+      Log.logPrint(e);
+    }
   }
 
   /// 播放器是否被移交给了悬浮窗。

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/scheduler.dart';
 
 /// 原生播放器事件
 enum NativePlayerEventType {
@@ -289,11 +290,21 @@ class NativePlayerBridge {
 
   void Function(String action, dynamic value)? onPageAction;
 
+  /// 在业务路由覆盖当前页前保存短暂底层，供原生播放页推入使用。
+  Future<void> preparePlayerEntry() =>
+      _activity.invokeMethod<void>('preparePlayerEntry');
+
+  Future<void> cancelPlayerEntry() =>
+      _activity.invokeMethod<void>('cancelPlayerEntry');
+
   Future<void> openPlayerPage(Map<String, dynamic> data) =>
       _activity.invokeMethod<void>('openPlayerPage', data);
 
-  Future<void> closePlayerPage() =>
-      _activity.invokeMethod<void>('closePlayerPage');
+  Future<void> closePlayerPage() async {
+    await _activity.invokeMethod<void>('closePlayerPage');
+    // Surface 被恢复不等于 Dart 自己会有脏帧；主动提交当前返回路由的一帧。
+    SchedulerBinding.instance.scheduleForcedFrame();
+  }
 
   Future<void> setPlayerFullscreen(bool fullscreen, bool landscape) =>
       _activity.invokeMethod<void>('setPlayerFullscreen',
@@ -591,8 +602,9 @@ class NativePlayerBridge {
     return result ?? false;
   }
 
-  Future<void> exitFloating() async {
-    await _method.invokeMethod("exitFloating");
+  Future<void> exitFloating({bool handoverToPage = false}) async {
+    await _method
+        .invokeMethod("exitFloating", {'handoverToPage': handoverToPage});
   }
 
   Future<bool> isFloating() async {

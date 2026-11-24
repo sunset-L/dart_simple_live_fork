@@ -89,6 +89,14 @@ class NativePlayerManager private constructor() {
 
     private var player: ExoPlayer? = null
     private var fullscreenView: PlayerView? = null
+    var onPrepareFloatingReturn: (() -> Unit)? = null
+    var onHoldFullscreenFrame: ((android.graphics.Bitmap?) -> Unit)? = null
+    private var returningFromFloating = false
+    private var floatingReturnListener: Player.Listener? = null
+    fun captureFloatingFrame(): android.graphics.Bitmap? = floatingWindow?.captureFrame()
+    fun captureFullscreenFrame(): android.graphics.Bitmap? =
+        (fullscreenView?.videoSurfaceView as? android.view.TextureView)?.bitmap
+
 
     fun attachFullscreenView(view: PlayerView) {
         fullscreenView = view
@@ -99,6 +107,9 @@ class NativePlayerManager private constructor() {
         if (fullscreenView !== view) return
         view.player = null
         fullscreenView = null
+        floatingReturnListener?.let { player?.removeListener(it) }
+        floatingReturnListener = null
+        returningFromFloating = false
         boundSurface = null
         applySurface()
     }
@@ -156,6 +167,7 @@ class NativePlayerManager private constructor() {
      * 之后不会置空。用它判断会让「离开自动暂停」在用户进过一次小窗后永久失效。
      */
     private var pausedByHome = false
+    private var stoppedPageInBackground = false
 
     /** 最近一次已知的**显示**视频尺寸（只由 VideoSize 回调写入） */
     private var videoWidth = 0
@@ -329,6 +341,8 @@ class NativePlayerManager private constructor() {
      * pendingFloatingTap，等新引擎的 Dart 侧订阅时补发。
      */
     fun detachActivity() {
+        onPrepareFloatingReturn = null
+        onHoldFullscreenFrame = null
         fullscreenView?.let { detachFullscreenView(it) }
         deviceOrientationListener?.disable()
         deviceOrientationListener = null
@@ -365,6 +379,15 @@ class NativePlayerManager private constructor() {
      * 后台暂停不清原生视频输出，回前台后直接恢复。
      */
     fun onBackground() {
+        // 完整播放页退到后台必须停网络/解码，不受旧的“按 Home 暂停”选项影响。
+        if (fullscreenView != null && !isFloatingVisible() && !isFloating) {
+            if (!stoppedPageInBackground) {
+                stoppedPageInBackground = true
+                stop()
+                Log.d(TAG, "player page suspended: stream stopped")
+            }
+            return
+        }
         if (!pauseOnHome) {
             return
         }
@@ -391,6 +414,11 @@ class NativePlayerManager private constructor() {
      * 早点让播放器重新拉流，画面能更早回来。
      */
     fun onUserReturn() {
+        if (stoppedPageInBackground) {
+            // Dart 重新读取房间及最新地址；不能直接重播可能过期的旧地址。
+            stoppedPageInBackground = false
+            return
+        }
         if (!pausedByHome) {
             return
         }
@@ -775,7 +803,8 @@ class NativePlayerManager private constructor() {
             }
 
             "exitFloating" -> {
-                exitFloating()
+                val handover = (arguments as? Map<*, *>)?.get("handoverToPage") == true
+                exitFloating(handover)
                 result.success(true)
             }
 
@@ -1353,6 +1382,9 @@ class NativePlayerManager private constructor() {
     }
 
     fun release() {
+        floatingReturnListener?.let { player?.removeListener(it) }
+        floatingReturnListener = null
+        returningFromFloating = false
         hasError = false
         currentUrl = null
         boundSurface = null
@@ -1366,6 +1398,7 @@ class NativePlayerManager private constructor() {
         // 下一次回到前台会误把刚打开的播放当成「自己暂停的那次」拉起来，
         // 表现为「明明手动暂停了，切个房间回来自己播了」。
         pausedByHome = false
+        stoppedPageInBackground = false
         player?.release()
         player = null
     }
@@ -1398,12 +1431,15 @@ class NativePlayerManager private constructor() {
     private fun applySurface() {
         val exoPlayer = player ?: return
         val fullscreen = fullscreenView
-        if (fullscreen != null && floatingSurface == null) {
+        if (fullscreen != null && (floatingSurface == null || returningFromFloating)) {
             boundSurface = null
             if (fullscreen.player !== exoPlayer) fullscreen.player = exoPlayer
             return
         }
-        if (fullscreen?.player != null) fullscreen.player = null
+        if (fullscreen?.player != null) {
+            onHoldFullscreenFrame?.invoke(captureFullscreenFrame())
+            fullscreen.player = null
+        }
         val target = floatingSurface
         if (target === boundSurface) {
             return
@@ -1419,6 +1455,9 @@ class NativePlayerManager private constructor() {
     // ---------------------------------------------------------------- 悬浮窗
 
     private fun enterFloating(width: Int, height: Int): Boolean {
+        floatingReturnListener?.let { player?.removeListener(it) }
+        floatingReturnListener = null
+        returningFromFloating = false
         if (!floatingWindowEnabled || isTvDevice()) {
             return false
         }
@@ -1437,9 +1476,33 @@ class NativePlayerManager private constructor() {
         return shown
     }
 
-    private fun exitFloating() {
+    private fun exitFloating(handoverToPage: Boolean = false) {
+        if (!handoverToPage) { finishFloatingReturn(); return }
+        if (!isFloatingVisible()) { isFloating = false; return }
+        if (returningFromFloating) return
+        returningFromFloating = true
+        val exo = player
+        if (exo == null) { finishFloatingReturn(); return }
+        val listener = object : Player.Listener {
+            override fun onRenderedFirstFrame() {
+                fullscreenView?.postOnAnimation { if (floatingReturnListener === this) finishFloatingReturn() }
+            }
+            override fun onPlayerError(error: PlaybackException) { finishFloatingReturn() }
+        }
+        floatingReturnListener = listener
+        exo.addListener(listener)
+        // 页内输出可能还没创建，保持小窗和它的最后一帧，attachFullscreenView 会接续绑定。
+        applySurface()
+    }
+
+    private fun finishFloatingReturn() {
+        floatingReturnListener?.let { player?.removeListener(it) }
+        floatingReturnListener = null
+        // hide 的 Surface 回调仍应指向页内，不能先恢复“小窗优先”。
         floatingWindow?.hide()
+        returningFromFloating = false
         isFloating = false
+        applySurface()
     }
 
     fun hasOverlayPermission(): Boolean {
@@ -1501,6 +1564,7 @@ class NativePlayerManager private constructor() {
 
     /** 点击悬浮窗：先发事件让 Dart 侧准备，再把 App 拉回前台 */
     fun onFloatingTap() {
+        onPrepareFloatingReturn?.invoke()
         // 没有监听者时（引擎已销毁）先记下来，等 Dart 侧订阅时补发。
         // 否则这次点击会彻底丢失，表现为「点小窗回不到播放页」。
         if (eventSink == null) {

@@ -32,12 +32,35 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
     private val siteLogo = ImageView(activity)
     private val popularity = TextView(activity)
     private val fire = ImageView(activity)
-    private val tabs = LinearLayout(activity)
+    private var tabPosition = 0f
+    private val tabPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+    private val tabs = object : LinearLayout(activity) {
+        override fun dispatchDraw(canvas: android.graphics.Canvas) {
+            super.dispatchDraw(canvas)
+            if (childCount == 0) return
+            tabPaint.color = style.divider
+            canvas.drawRect(0f, height - dp(1).toFloat(), width.toFloat(), height.toFloat(), tabPaint)
+            val tabWidth = width.toFloat() / childCount
+            tabPaint.color = style.primary
+            canvas.drawRect(tabWidth * tabPosition, height - dp(3).toFloat(),
+                tabWidth * (tabPosition + 1f), height.toFloat(), tabPaint)
+        }
+    }
     private val pager = NativePlayerPager(activity)
     private val bottom = LinearLayout(activity)
+    /** 关注/刷新/分享只在方向切换结束、最终布局稳定后出现，不参与视频缩放。 */
+    fun setPageActionsTransitioning(value: Boolean) {
+        bottom.alpha = if (value) 0f else 1f
+        bottom.isEnabled = !value
+        // 动画遮罩只保留一幅视频。保留真实 TextureView/输出，但落位前不露出第二幅画面。
+        video.alpha = if (value) 0f else 1f
+    }
     private val follow = NativePlayerAction(activity)
     private val latest = TextView(activity)
     private val chat = ArrayList<Map<*, *>>()
+    // 阅读旧消息时冻结显示列表，新消息另存为有界队列，避免截断旧消息挤动视口。
+    private val unreadChat = ArrayList<Map<*, *>>()
+    private var chatScrollState = AbsListView.OnScrollListener.SCROLL_STATE_IDLE
     private val lists = LinkedHashMap<String, ListView>()
     private val adapters = LinkedHashMap<String, RoomAdapter>()
     private val positions = HashMap<String, Pair<Int, Int>>()
@@ -45,14 +68,18 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
     private var activeTab = "聊天"
     private var autoScroll = true
     private var sheet: NativePlayerSheet? = null
+    private var durationDialog: android.app.Dialog? = null
     private var sheetResult: MethodChannel.Result? = null
     private var sheetRefresh: (() -> Unit)? = null
     private var roomPager: NativePlayerPager? = null
+    private var followRefresh: NativePlayerRefresh? = null
     private var disposed = false
     private var safeLeft = 0; private var safeTop = 0; private var safeRight = 0; private var safeBottom = 0
 
     init {
         isFocusableInTouchMode = true
+        // 挂载前就用宿主的真实系统栏边距，不能先绘制零边距再跳到正确位置。
+        ViewCompat.getRootWindowInsets(activity.window.decorView)?.let { updateInsets(it) }
         header.gravity = Gravity.CENTER_VERTICAL
         header.addView(back, LinearLayout.LayoutParams(dp(48), -1))
         title.gravity = Gravity.CENTER; title.textSize = 16f; title.maxLines = 1; title.ellipsize = TextUtils.TruncateAt.END
@@ -75,18 +102,38 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
         profile.addView(fire, LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(4) })
         popularity.textSize = 14f; profile.addView(popularity); addView(profile)
         addView(tabs); addView(pager)
+        pager.onScrollPosition = { position ->
+            tabPosition = position; tabs.invalidate()
+            // 拖动时让相邻页有内容，不能等松手选中后才绑定空列表。
+            if (!fullscreen) for (index in listOf(kotlin.math.floor(position).toInt(), kotlin.math.ceil(position).toInt()).distinct()) {
+                val name = tabNames.getOrNull(index) ?: continue
+                val list = lists[name] ?: continue
+                if (list.adapter == null) {
+                    adapters[name]?.refresh(); list.adapter = adapters[name]
+                    positions[name]?.let { list.setSelectionFromTop(it.first, it.second) }
+                }
+            }
+        }
         pager.onSelected = { index -> tabNames.getOrNull(index)?.let { activeTab = it; bindVisibleList(); paintTabs() } }
         bottom.gravity = Gravity.CENTER_VERTICAL
         for (button in listOf(follow, action("refresh", "刷新") { onAction("refresh", null) }, action("share", "分享") { onAction("share", null) })) bottom.addView(button, LinearLayout.LayoutParams(0, -1, 1f))
         style.click(follow) { if (data["followed"] == true) confirmUnfollow() else onAction("follow", null) }; addView(bottom)
         latest.text = "最新消息"; latest.textSize = 12f; latest.gravity = Gravity.CENTER; latest.visibility = GONE
         latest.setOnClickListener { autoScroll = true; scrollLatest() }; addView(latest)
-        ViewCompat.setOnApplyWindowInsetsListener(this) { _, insets ->
-            val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout()); val system = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            safeLeft = maxOf(cutout.left, if (fullscreen) 0 else system.left); safeTop = maxOf(cutout.top, if (fullscreen) 0 else system.top)
-            safeRight = maxOf(cutout.right, if (fullscreen) 0 else system.right); safeBottom = maxOf(cutout.bottom, if (fullscreen) 0 else system.bottom)
-            video.setSafeInsets(cutout.left, cutout.top, cutout.right, cutout.bottom); requestLayout(); insets
-        }
+        ViewCompat.setOnApplyWindowInsetsListener(this) { _, insets -> updateInsets(insets); insets }
+    }
+    private fun updateInsets(insets: WindowInsetsCompat) {
+        val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+        // 使用最终系统栏占位，不跟随显示/隐藏动画的中间值重排底栏。
+        val system = insets.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.systemBars())
+        val left = maxOf(cutout.left, if (fullscreen) 0 else system.left)
+        val top = maxOf(cutout.top, if (fullscreen) 0 else system.top)
+        val right = maxOf(cutout.right, if (fullscreen) 0 else system.right)
+        val bottom = maxOf(cutout.bottom, if (fullscreen) 0 else system.bottom)
+        val changed = safeLeft != left || safeTop != top || safeRight != right || safeBottom != bottom
+        safeLeft = left; safeTop = top; safeRight = right; safeBottom = bottom
+        video.setSafeInsets(cutout.left, cutout.top, cutout.right, cutout.bottom)
+        if (changed) requestLayout()
     }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).roundToInt()
     private fun action(icon: String, label: String, clicked: () -> Unit) = NativePlayerAction(activity).apply {
@@ -101,15 +148,20 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
             val ratio = (data["aspectRatio"] as? Number)?.toDouble()?.takeIf { it.isFinite() && it in .2..4.0 } ?: 16.0 / 9
             val videoHeight = (availableWidth / ratio).roundToInt().coerceAtMost((availableHeight * .44).roundToInt())
             measure(header, availableWidth, dp(56)); measure(video, availableWidth, videoHeight); measure(profile, availableWidth, dp(65))
-            measure(tabs, availableWidth, dp(48)); measure(bottom, availableWidth, dp(48)); measure(pager, availableWidth, availableHeight - videoHeight - dp(217)); measure(latest, dp(84), dp(32))
+            measure(tabs, availableWidth, dp(48)); measure(bottom, availableWidth, dp(48)); measure(pager, availableWidth, availableHeight - videoHeight - dp(217)); measure(latest, dp(112), dp(36))
         }
         sheet?.let { measure(it, width, height) }
     }
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         if (fullscreen) video.layout(0, 0, width, height) else {
             var y = safeTop
-            for (view in listOf(header, video, profile, tabs, pager, bottom)) { view.layout(safeLeft, y, width - safeRight, y + view.measuredHeight); y += view.measuredHeight }
-            latest.layout(width - safeRight - dp(100), pager.bottom - dp(48), width - safeRight - dp(16), pager.bottom - dp(16))
+            for (view in listOf(header, video, profile, tabs)) { view.layout(safeLeft, y, width - safeRight, y + view.measuredHeight); y += view.measuredHeight }
+            // 底部操作栏锚定页面安全区底部，不能随聊天页/播放器测量高度累加漂移。
+            val bottomEdge = height - safeBottom
+            val bottomTop = bottomEdge - bottom.measuredHeight
+            bottom.layout(safeLeft, bottomTop, width - safeRight, bottomEdge)
+            pager.layout(safeLeft, y, width - safeRight, bottomTop.coerceAtLeast(y))
+            latest.layout(width - safeRight - dp(128), pager.bottom - dp(52), width - safeRight - dp(16), pager.bottom - dp(16))
         }
         sheet?.layout(0, 0, width, height)
     }
@@ -117,13 +169,15 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
         if (fullscreen == value) return
         savePositions(); fullscreen = value; video.setFullscreen(value)
         for (view in listOf(header, profile, tabs, pager, bottom)) view.visibility = if (value) GONE else VISIBLE
-        latest.visibility = GONE; bindVisibleList(); requestLayout(); ViewCompat.requestApplyInsets(this)
+        latest.visibility = GONE; bindVisibleList()
+        ViewCompat.getRootWindowInsets(this)?.let { updateInsets(it) }
+        requestLayout(); ViewCompat.requestApplyInsets(this)
     }
     fun update(values: Map<*, *>) {
         val changedRoom = data["roomKey"] != values["roomKey"]
-        val listChanged = listOf("title", "userName", "roomKey", "chatSize", "chatGap", "chatBubble", "superChatEnabled", "follows", "history", "superChats", "dark", "primaryColor", "autoExitEnabled", "autoExitCountdown").any { data[it] != values[it] }
+        val listChanged = listOf("title", "userName", "roomKey", "chatSize", "chatGap", "chatBubble", "superChatEnabled", "follows", "history", "superChats", "dark", "primaryColor", "autoExitEnabled", "autoExitCountdown", "followRefreshing", "historyRefreshing").any { data[it] != values[it] }
         data = values; style = NativePlayerStyle(activity, data)
-        if (changedRoom) { chat.clear(); positions.clear(); autoScroll = true }
+        if (changedRoom) { chat.clear(); unreadChat.clear(); positions.clear(); autoScroll = true }
         setBackgroundColor(style.background); header.setBackgroundColor(style.background); profile.setBackgroundColor(style.surface)
         title.text = values["title"]?.toString() ?: "直播间"; title.setTextColor(style.foreground)
         back.setImageDrawable(NativeIcons.drawable("back", style.foreground)); menu.setImageDrawable(NativeIcons.drawable("more", style.foreground))
@@ -134,26 +188,48 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
         for (i in 0 until bottom.childCount) (bottom.getChildAt(i) as NativePlayerAction).setColor(style.primary)
         follow.bind(if (values["followed"] == true) "followFilled" else "follow",
             if (values["followed"] == true) "取消关注" else "关注", style.primary)
-        bottom.setBackgroundColor(style.surface); latest.setTextColor(style.primary); latest.background = NativeIcons.background(style.surface, dp(16).toFloat())
+        bottom.setBackgroundColor(style.surface)
+        latest.setTextColor(style.primary)
+        latest.background = NativeIcons.background(
+            androidx.core.graphics.ColorUtils.blendARGB(style.surface, style.primary, .16f), dp(18).toFloat()).apply {
+            setStroke(dp(1), (style.primary and 0x00FFFFFF) or 0x88000000.toInt())
+        }
+        val latestArrow = NativeIcons.drawable("arrowDown", style.primary).apply { setBounds(0, 0, dp(18), dp(18)) }
+        latest.setCompoundDrawables(latestArrow, null, null, null)
+        latest.compoundDrawablePadding = dp(4); latest.setPadding(dp(10), 0, dp(10), 0)
         video.update(values)
         val names = listOf("聊天") + (if (values["hasSC"] == true) listOf("SC") else emptyList()) + listOf("关注", "设置")
         if (names != tabNames) buildTabs(names)
         if (!fullscreen && listChanged) { adapters[activeTab]?.refresh(); paintTabs() }
-        if (listChanged) sheetRefresh?.invoke(); requestLayout()
+        if (listChanged) {
+            followRefresh?.setRefreshing(values["followRefreshing"] == true)
+            sheetRefresh?.invoke()
+        }
+        requestLayout()
     }
     private fun buildTabs(names: List<String>) {
-        pager.dispose(); pager.removeAllViews(); tabs.removeAllViews(); lists.clear(); adapters.clear(); tabNames = names
+        pager.dispose(); pager.removeAllViews(); tabs.removeAllViews(); followRefresh = null; lists.clear(); adapters.clear(); tabNames = names
         if (activeTab !in names) activeTab = "聊天"
         for (name in names) {
             val cell = FrameLayout(activity); cell.addView(style.text(name).apply { gravity = Gravity.CENTER }, FrameLayout.LayoutParams(-1, -1))
-            cell.addView(View(activity), FrameLayout.LayoutParams(-1, dp(1), Gravity.BOTTOM)); style.click(cell) { savePositions(); pager.select(names.indexOf(name)) }
+            style.click(cell) { savePositions(); pager.select(names.indexOf(name)) }
             tabs.addView(cell, LinearLayout.LayoutParams(0, -1, 1f))
             val list = newList(); val adapter = RoomAdapter(name); lists[name] = list; adapters[name] = adapter
             if (name == "聊天") list.setOnScrollListener(object : AbsListView.OnScrollListener {
-                override fun onScrollStateChanged(v: AbsListView, state: Int) { if (state != 0) autoScroll = false }
+                override fun onScrollStateChanged(v: AbsListView, state: Int) {
+                    val wasScrolling = chatScrollState != AbsListView.OnScrollListener.SCROLL_STATE_IDLE
+                    chatScrollState = state
+                    if (state != AbsListView.OnScrollListener.SCROLL_STATE_IDLE) {
+                        autoScroll = false
+                    } else if (wasScrolling && !fullscreen && activeTab == "聊天" && list.adapter != null && list.childCount > 0) {
+                        autoScroll = !list.canScrollVertically(1)
+                        if (autoScroll) scrollLatest()
+                    }
+                    updateLatestButton()
+                }
                 override fun onScroll(v: AbsListView, first: Int, visible: Int, total: Int) {
-                    if (total > 0 && first + visible >= total) autoScroll = true
-                    latest.visibility = if (!fullscreen && activeTab == "聊天" && !autoScroll) VISIBLE else GONE
+                    // 不能在手指刚开始滑动、仍暂处底部时重新打开自动跟随。
+                    updateLatestButton()
                 }
             })
             list.setOnItemClickListener { _, _, index, _ -> adapter.items.getOrNull(index)?.let { item ->
@@ -162,35 +238,58 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
             list.setOnItemLongClickListener { _, _, index, _ -> if (name == "聊天" && index > 0) {
                 adapter.items.getOrNull(index)?.get("message")?.toString()?.let { text -> showMessageActions(text) }; true
             } else false }
-            pager.addView(list)
+            if (name == "关注") {
+                followRefresh = NativePlayerRefresh(activity, list, style) { onAction("reloadFollow", null) }
+                pager.addView(followRefresh)
+            } else pager.addView(list)
         }
         pager.select(names.indexOf(activeTab), false); paintTabs()
     }
     private fun paintTabs() {
-        tabs.setBackgroundColor(style.surface)
+        tabs.setBackgroundColor(style.surface); tabs.invalidate()
         for (i in tabNames.indices) {
             val cell = tabs.getChildAt(i) as FrameLayout; val selected = tabNames[i] == activeTab; val label = cell.getChildAt(0) as TextView
             val count = (data["superChats"] as? List<*>)?.size ?: 0
             label.text = if (tabNames[i] == "SC" && count > 0) "SC($count)" else tabNames[i]
-            label.setTextColor(if (selected) style.primary else style.foreground); cell.getChildAt(1).setBackgroundColor(if (selected) style.primary else style.divider)
+            label.setTextColor(if (selected) style.primary else style.foreground)
+
         }
     }
-    private fun newList() = ListView(activity).apply { divider = null; isVerticalScrollBarEnabled = false; isHorizontalScrollBarEnabled = false; overScrollMode = OVER_SCROLL_NEVER; clipToPadding = false }
+    private fun newList() = ListView(activity).apply { setSelector(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)); divider = null; isVerticalScrollBarEnabled = false; isHorizontalScrollBarEnabled = false; overScrollMode = OVER_SCROLL_NEVER; clipToPadding = false }
     private fun savePositions() { for ((name, list) in lists) if (list.adapter != null) positions[name] = Pair(list.firstVisiblePosition, list.getChildAt(0)?.top ?: 0) }
     private fun bindVisibleList() {
         for ((name, list) in lists) {
             if (fullscreen) { if (list.adapter != null) positions[name] = Pair(list.firstVisiblePosition, list.getChildAt(0)?.top ?: 0); list.adapter = null }
             else { if (name == activeTab || list.adapter == null) adapters[name]?.refresh(); if (list.adapter == null) { list.adapter = adapters[name]; positions[name]?.let { list.setSelectionFromTop(it.first, it.second) } } }
         }
-        if (activeTab != "聊天") latest.visibility = GONE
+        updateLatestButton()
         if (!fullscreen && activeTab == "聊天" && autoScroll) scrollLatest()
     }
-    fun addMessages(items: List<*>) {
-        items.filterIsInstance<Map<*, *>>().forEach { chat.add(it) }; if (chat.size > 200) chat.subList(0, chat.size - 200).clear()
-        if (!fullscreen && activeTab == "聊天") { adapters["聊天"]?.refresh(); if (autoScroll) scrollLatest() }
+    private fun updateLatestButton() {
+        latest.visibility = if (!fullscreen && activeTab == "聊天" && !autoScroll) VISIBLE else GONE
     }
-    fun clearMessages() { chat.clear(); if (!fullscreen) adapters["聊天"]?.refresh() }
-    private fun scrollLatest() { latest.visibility = GONE; lists["聊天"]?.post { if (!fullscreen && activeTab == "聊天" && autoScroll) lists["聊天"]?.setSelection((adapters["聊天"]?.count ?: 1) - 1) } }
+    private fun trimMessages(items: ArrayList<Map<*, *>>) {
+        if (items.size > 200) items.subList(0, items.size - 200).clear()
+    }
+    fun addMessages(items: List<*>) {
+        val messages = items.filterIsInstance<Map<*, *>>()
+        if (!autoScroll) {
+            unreadChat.addAll(messages); trimMessages(unreadChat)
+            updateLatestButton()
+            return
+        }
+        chat.addAll(messages); trimMessages(chat)
+        if (!fullscreen && activeTab == "聊天") { adapters["聊天"]?.refresh(); scrollLatest() }
+    }
+    fun clearMessages() { chat.clear(); unreadChat.clear(); if (!fullscreen) adapters["聊天"]?.refresh() }
+    private fun scrollLatest() {
+        if (unreadChat.isNotEmpty()) {
+            chat.addAll(unreadChat); unreadChat.clear(); trimMessages(chat)
+            adapters["聊天"]?.refresh()
+        }
+        latest.visibility = GONE
+        lists["聊天"]?.post { if (!fullscreen && activeTab == "聊天" && autoScroll) lists["聊天"]?.setSelection((adapters["聊天"]?.count ?: 1) - 1) }
+    }
     private fun maps(key: String) = (data[key] as? List<*>)?.filterIsInstance<Map<*, *>>() ?: emptyList()
     private fun loadLogo(view: ImageView, path: String) {
         if (view.tag == path) return
@@ -257,7 +356,7 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
         val labels = row.getChildAt(1) as LinearLayout; val heading = labels.getChildAt(0) as LinearLayout
         (heading.getChildAt(0) as TextView).apply { text = item["userName"]?.toString() ?: ""; setTextColor(style.foreground); maxLines = 1; maxWidth = dp(if (fullscreen) 200 else 160); ellipsize = TextUtils.TruncateAt.END }
         (heading.getChildAt(1) as TextView).apply {
-            visibility = if (!fullscreen && item["status"] != null) VISIBLE else GONE
+            visibility = if (item["status"] != null && (!fullscreen || item.containsKey("liveStartTime").not())) VISIBLE else GONE
             text = SpannableStringBuilder("  ● ${item["status"]}").apply { setSpan(ForegroundColorSpan(if (item["status"] == "直播中") 0xFF4CAF50.toInt() else Color.GRAY), 2, 3, 0) }; setTextColor(style.foreground)
         }
         val info = labels.getChildAt(1) as LinearLayout
@@ -318,6 +417,7 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
         addView(popup, LayoutParams(-1, -1)); requestLayout(); popup.enter(); return popup
     }
     private fun clearSheet() {
+        durationDialog?.dismiss(); durationDialog = null
         sheetRefresh = null; roomPager?.dispose(); roomPager = null; sheet?.dispose(); sheet = null
         val result = sheetResult; sheetResult = null; result?.success(null)
     }
@@ -325,17 +425,34 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
     private fun answer(value: Any?) { val result = sheetResult; sheetResult = null; result?.success(value); sheet?.dismiss() }
     fun showDialog(kind: String, values: Map<*, *>, result: MethodChannel.Result) {
         when (kind) {
+            "playbackInfo" -> { showPlaybackInfo(values); result.success(null) }
             "shield", "autoExitSettings", "autoExit" -> {
-                val popup = beginSheet(if (kind == "shield") "关键词屏蔽" else "定时关闭", side = false, heightPx = dp(if (kind == "shield") 340 else 280) + safeBottom)
+                val popup = beginSheet(if (kind == "shield") "关键词屏蔽" else "定时关闭", side = false, heightPx = dp(if (kind == "shield") 340 else if (kind == "autoExitSettings") 180 else 280) + safeBottom)
                 sheetResult = result
                 if (kind == "shield") {
-                    val input = EditText(activity).apply { setText((values["keywords"] as? List<*>)?.joinToString("\n") ?: ""); hint = "每行一个关键词，正则使用 /表达式/"; setTextColor(style.foreground); setHintTextColor(Color.GRAY); textSize = 14f; gravity = Gravity.TOP; setPadding(dp(16), dp(12), dp(16), dp(12)) }
-                    popup.panel.addView(input, LinearLayout.LayoutParams(-1, 0, 1f)); popup.panel.addView(action("", "保存") { answer(input.text.toString().lines().map { it.trim() }.filter { it.isNotEmpty() }) }, LinearLayout.LayoutParams(-1, dp(48)))
+                    val input = NativePlayerInput(activity, style).apply {
+                        setText((values["keywords"] as? List<*>)?.joinToString("\n") ?: "")
+                        hint = "每行一个关键词，正则使用 /表达式/"
+                        inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                        textSize = 14f; gravity = Gravity.TOP
+                    }
+                    popup.panel.addView(input, LinearLayout.LayoutParams(-1, 0, 1f).apply { setMargins(dp(16), dp(12), dp(16), dp(8)) }); popup.panel.addView(action("", "保存") { answer(input.text.toString().lines().map { it.trim() }.filter { it.isNotEmpty() }) }, LinearLayout.LayoutParams(-1, dp(48)))
                 } else if (kind == "autoExitSettings") {
-                    val enabled = Switch(activity).apply { text = "启用定时关闭"; isChecked = values["enabled"] == true; setTextColor(style.foreground); setPadding(dp(16), 0, dp(16), 0) }
-                    val minutes = EditText(activity).apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER; setText((values["minutes"] ?: 60).toString()); hint = "分钟"; setTextColor(style.foreground); setPadding(dp(16), 0, dp(16), 0) }
-                    popup.panel.addView(enabled, LinearLayout.LayoutParams(-1, dp(52))); popup.panel.addView(minutes, LinearLayout.LayoutParams(-1, dp(48)))
-                    popup.panel.addView(action("", "保存") { answer(mapOf("enabled" to enabled.isChecked, "minutes" to (minutes.text.toString().toIntOrNull() ?: 60).coerceIn(1, 1440))) }, LinearLayout.LayoutParams(-1, dp(48)))
+                    var enabled = values["enabled"] == true
+                    var minutes = (values["minutes"] as? Number)?.toInt()?.coerceIn(1, 1439) ?: 60
+                    val row = LinearLayout(activity).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), 0, dp(16), 0) }
+                    row.addView(style.text("启用定时关闭", 16f), LinearLayout.LayoutParams(0, -2, 1f))
+                    val toggle = NativePlayerSwitch(activity, style).apply { isChecked = enabled; contentDescription = "启用定时关闭" }
+                    row.addView(toggle); popup.panel.addView(row, LinearLayout.LayoutParams(-1, dp(56)))
+                    val timeRow = LinearLayout(activity).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), 0, dp(16), 0) }
+                    val time = style.text("", 16f)
+                    timeRow.addView(time, LinearLayout.LayoutParams(0, -2, 1f))
+                    timeRow.addView(ImageView(activity).apply { setImageDrawable(NativeIcons.drawable("chevron", style.foreground)) }, LinearLayout.LayoutParams(dp(24), dp(24)))
+                    fun refreshTime() { time.text = "自动关闭时间：${minutes / 60}小时${minutes % 60}分钟"; timeRow.isEnabled = enabled; timeRow.alpha = if (enabled) 1f else .38f }
+                    fun changed() { refreshTime(); onAction("autoExitChanged", mapOf("enabled" to enabled, "minutes" to minutes)) }
+                    toggle.setOnCheckedChangeListener { _, checked -> enabled = checked; changed() }
+                    style.click(timeRow) { if (enabled) showDurationInput(minutes) { minutes = it; changed() } }
+                    popup.panel.addView(timeRow, LinearLayout.LayoutParams(-1, dp(56))); refreshTime()
                 } else {
                     popup.panel.addView(style.text("播放时间已到，是否关闭直播间？").apply { setPadding(dp(16), dp(12), dp(16), dp(12)) })
                     for ((label, value) in listOf("继续播放" to "delay", "关闭直播间" to "closeLive", "退出应用" to "exitApplication")) popup.panel.addView(action("", label) { answer(value) }, LinearLayout.LayoutParams(-1, dp(44)))
@@ -343,6 +460,54 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
             }
             else -> { showPanel(kind); result.success(null) }
         }
+    }
+    private fun showDurationInput(minutes: Int, selected: (Int) -> Unit) {
+        val box = LinearLayout(activity).apply { gravity = Gravity.CENTER; setPadding(dp(24), dp(20), dp(24), dp(8)) }
+        fun number(value: Int, label: String): EditText {
+            val field = NativePlayerInput(activity, style).apply {
+                inputType = android.text.InputType.TYPE_CLASS_NUMBER; filters = arrayOf(android.text.InputFilter.LengthFilter(2))
+                setText(value.toString().padStart(2, '0')); textSize = 28f; gravity = Gravity.CENTER
+                setTextColor(style.foreground); background = NativeIcons.background(style.background, dp(8).toFloat())
+                setPadding(dp(8), dp(12), dp(8), dp(12)); contentDescription = label; setSelectAllOnFocus(true)
+            }
+            box.addView(LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(field, LinearLayout.LayoutParams(-1, dp(64)))
+                addView(style.text(label, 12f, Color.GRAY).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(-1, dp(28)))
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+            return field
+        }
+        val hour = number(minutes / 60, "小时")
+        box.addView(style.text(":", 28f).apply { gravity = Gravity.CENTER; setPadding(dp(12), 0, dp(12), dp(24)) })
+        val minute = number(minutes % 60, "分钟")
+        // 应用宿主不是 Material Activity，不能直接用默认 AlertDialog（部分手机是黑色旧皮肤）。
+        val dialog = android.app.Dialog(activity)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val card = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            background = NativeIcons.background(style.sheetSurface, dp(24).toFloat())
+            setPadding(0, dp(8), 0, dp(8))
+        }
+        card.addView(style.text("设置自动关闭时间", 20f).apply { setPadding(dp(24), dp(16), dp(24), dp(4)) })
+        card.addView(box)
+        val buttons = LinearLayout(activity).apply { gravity = Gravity.END; setPadding(dp(16), dp(8), dp(16), 0) }
+        buttons.addView(action("", "取消") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(72), dp(48)))
+        buttons.addView(action("", "确定") {
+            val h = hour.text.toString().toIntOrNull(); val m = minute.text.toString().toIntOrNull()
+            when {
+                h == null || h !in 0..23 -> hour.error = "请输入0至23小时"
+                m == null || m !in 0..59 -> minute.error = "请输入0至59分钟"
+                h == 0 && m == 0 -> minute.error = "关闭时间不能为0"
+                else -> { selected(h * 60 + m); dialog.dismiss() }
+            }
+        }, LinearLayout.LayoutParams(dp(72), dp(48)))
+        card.addView(buttons)
+        dialog.setContentView(card)
+        durationDialog = dialog
+        dialog.setOnDismissListener { if (durationDialog === dialog) durationDialog = null }
+        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+        dialog.show()
+        dialog.window?.setLayout(minOf(dp(360), width - dp(48)), -2)
     }
     private fun choose(title: String, items: List<String>, selected: Int, clicked: (Int) -> Unit) {
         val popup = beginSheet(title, side = false, heightPx = (dp(56 + items.size.coerceIn(1, 4) * 48) + safeBottom).coerceAtMost((height * .85).toInt()))
@@ -367,29 +532,56 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
         "settings", "playerSettings" -> choose("画面尺寸", listOf("适应", "拉伸", "铺满", "16:9", "4:3"), (data["scaleMode"] as? Number)?.toInt() ?: 0) { onAction("scale", it) }
         "danmakuSettings" -> showDanmakuSettings()
     } }
+    /** 更多菜单的播放信息是可复制地址的详情页，与视频实时指标浮层分开。 */
+    private fun showPlaybackInfo(values: Map<*, *>) {
+        val popup = beginSheet("播放信息", heightPx = ((height - safeTop) * .72).toInt())
+        val box = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+        fun field(label: String, value: String, selectable: Boolean = false) {
+            val row = LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(14), dp(16), dp(14))
+            }
+            row.addView(style.text(label, 16f))
+            row.addView(style.text(value, if (selectable) 12f else 14f, style.secondary).apply {
+                setPadding(0, dp(8), 0, 0); setTextIsSelectable(selectable)
+                if (selectable) highlightColor = Color.TRANSPARENT
+            })
+            box.addView(row); box.addView(style.line())
+        }
+        field("播放器", "Android native (ExoPlayer)")
+        val url = values["url"]?.toString().orEmpty()
+        field("播放地址", url.ifEmpty { "暂无（尚未取流）" }, selectable = url.isNotEmpty())
+        if (url.isNotEmpty()) box.addView(action("copy", "复制播放地址") {
+            val clipboard = activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("播放地址", url))
+            android.widget.Toast.makeText(activity, "播放地址已复制", android.widget.Toast.LENGTH_SHORT).show()
+        }, LinearLayout.LayoutParams(-1, dp(48)))
+        popup.panel.addView(ScrollView(activity).apply {
+            isVerticalScrollBarEnabled = false; addView(box)
+        }, LinearLayout.LayoutParams(-1, 0, 1f))
+    }
+
     private fun showDanmakuSettings() {
         val popup = beginSheet("弹幕设置"); val box = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-        val entries = listOf(Triple("字号", "fontSize", 12..32), Triple("字重", "fontWeight", 1..9), Triple("不透明度", "opacity", 1..10), Triple("显示区域", "area", 1..10), Triple("滚动时长", "duration", 5..15), Triple("顶部边距", "topMargin", 0..72), Triple("底部边距", "bottomMargin", 0..72))
+        val entries = listOf(Triple("字号", "fontSize", 12..32), Triple("字重", "fontWeight", 1..9), Triple("不透明度", "opacity", 2..20), Triple("显示区域", "area", 2..20), Triple("滚动时长", "duration", 5..15), Triple("顶部边距", "topMargin", 0..72), Triple("底部边距", "bottomMargin", 0..72))
         for ((label, key, range) in entries) {
             val percent = key == "opacity" || key == "area"; val value = (data[key] as? Number)?.toFloat() ?: range.first.toFloat()
             val header = LinearLayout(activity).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), dp(12), dp(16), 0) }
             header.addView(style.text(label, 16f), LinearLayout.LayoutParams(0, -2, 1f))
             val heading = style.text("${if (percent) (value * 100).roundToInt() else value.toInt()}${if (percent) "%" else ""}", 16f)
             header.addView(heading); box.addView(header)
-            val slider = NativePlayerSlider(activity, style).apply { contentDescription = label; max = range.last - range.first; progress = ((if (percent) value * 10 else value) - range.first).roundToInt().coerceIn(0, max) }
+            val slider = NativePlayerSlider(activity, style).apply { contentDescription = label; max = range.last - range.first; progress = ((if (percent) value * 20 else value) - range.first).roundToInt().coerceIn(0, max) }
             slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(s: SeekBar, p: Int, user: Boolean) { heading.text = "${if (percent) (p + range.first) * 10 else p + range.first}${if (percent) "%" else ""}" }
+                override fun onProgressChanged(s: SeekBar, p: Int, user: Boolean) { heading.text = "${if (percent) (p + range.first) * 5 else p + range.first}${if (percent) "%" else ""}" }
                 override fun onStartTrackingTouch(s: SeekBar) = Unit
-                override fun onStopTrackingTouch(s: SeekBar) { onAction(key, if (percent) (s.progress + range.first) / 10.0 else s.progress + range.first) }
+                override fun onStopTrackingTouch(s: SeekBar) { onAction(key, if (percent) (s.progress + range.first) / 20.0 else s.progress + range.first) }
             }); box.addView(slider, LinearLayout.LayoutParams(-1, dp(40)))
         }
         box.addView(action("settings", "关键词屏蔽") { onAction("shieldSettings", null) }, LinearLayout.LayoutParams(-1, dp(48)))
         popup.panel.addView(ScrollView(activity).apply { isVerticalScrollBarEnabled = false; addView(box) }, LinearLayout.LayoutParams(-1, 0, 1f))
     }
     private fun showMore() {
-        val entries = mutableListOf(Triple("refresh", "刷新", "refresh"), Triple("quality", "清晰度", "quality"), Triple("line", "线路", "line"), Triple("aspect", "画面尺寸", "playerSettings"), Triple("camera", "截图", "screenshot"))
-        if (data["floatingEnabled"] == true) entries.add(Triple("floating", "悬浮小窗", "floating"))
-        entries.addAll(listOf(Triple("timer", "定时关闭", "autoExitSettings"), Triple("share", "分享直播间", "share"), Triple("link", "复制链接", "copyRoom"), Triple("openApp", "APP中打开", "openApp"), Triple("info", "播放信息", "metrics")))
+        val entries = mutableListOf(Triple("quality", "清晰度", "quality"), Triple("line", "线路", "line"), Triple("aspect", "画面尺寸", "playerSettings"))
+        entries.addAll(listOf(Triple("timer", "定时关闭", "autoExitSettings"), Triple("share", "分享直播间", "share"), Triple("link", "复制链接", "copyRoom"), Triple("openApp", "APP中打开", "openApp"), Triple("info", "播放信息", "playbackInfo")))
         val columns = ((minOf(width, dp(600)) - dp(16)) / dp(76)).coerceAtLeast(2); val rows = (entries.size + columns - 1) / columns
         val popup = beginSheet("更多操作", side = false, heightPx = dp(56 + rows * 84 + 16) + safeBottom)
         val grid = GridLayout(activity).apply { columnCount = columns; setPadding(dp(8), 0, dp(8), dp(8)) }
@@ -406,15 +598,26 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
         val headings = LinearLayout(activity).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), 0, 0, 0) }
         val pages = NativePlayerPager(activity); roomPager = pages; pages.onPanelDrag = popup::drag
         val followList = newList(); val historyList = newList(); val followAdapter = RoomAdapter("关注"); val historyAdapter = RoomAdapter("历史")
-        followList.adapter = followAdapter; historyList.adapter = historyAdapter; pages.addView(followList); pages.addView(historyList)
+        followList.adapter = followAdapter; historyList.adapter = historyAdapter
+        val followPull = NativePlayerRefresh(activity, followList, style) { onAction("reloadFollow", null) }
+        val historyPull = NativePlayerRefresh(activity, historyList, style) { onAction("reloadHistory", null) }
+        pages.addView(followPull); pages.addView(historyPull)
         var locked = data["roomListLocked"] != false
         for ((index, label) in listOf("关注", "历史").withIndex()) headings.addView(action(if (index == 0) "followTab" else "history", label) { pages.select(index) }, LinearLayout.LayoutParams(0, dp(48), 1f))
         val lock = NativeIcons.button(activity, if (locked) "lock" else "unlock", "切房后保持面板") { locked = !locked; onAction("roomListLocked", locked); (headings.getChildAt(2) as ImageView).setImageDrawable(NativeIcons.drawable(if (locked) "lock" else "unlock", style.foreground)) }
-        lock.setImageDrawable(NativeIcons.drawable(if (locked) "lock" else "unlock", style.foreground)); headings.addView(lock, LinearLayout.LayoutParams(dp(48), dp(48)))
+        lock.setImageDrawable(NativeIcons.drawable(if (locked) "lock" else "unlock", style.foreground))
+        // 48dp 点击区域不变；20dp 图标四边等距，始终与所在行居中对齐。
+        lock.setPadding(dp(14), dp(14), dp(14), dp(14))
+        lock.scaleType = ImageView.ScaleType.FIT_CENTER
+        headings.addView(lock, LinearLayout.LayoutParams(dp(48), dp(48)).apply { gravity = Gravity.CENTER_VERTICAL })
         pages.onSelected = { selected -> for (i in 0..1) (headings.getChildAt(i) as NativePlayerAction).apply { setColor(if (i == selected) style.primary else Color.GRAY); setSelectedStyle(i == selected) } }
         popup.panel.addView(headings, LinearLayout.LayoutParams(-1, dp(48))); popup.panel.addView(style.line()); popup.panel.addView(pages, LinearLayout.LayoutParams(-1, 0, 1f))
         for ((list, adapter) in listOf(followList to followAdapter, historyList to historyAdapter)) list.setOnItemClickListener { _, _, i, _ -> adapter.items.getOrNull(i)?.let { onAction("openRoom", it); if (!locked) popup.dismiss() } }
-        sheetRefresh = { followAdapter.refresh(); historyAdapter.refresh() }; sheetRefresh?.invoke(); pages.select(0, false)
+        sheetRefresh = {
+            followAdapter.refresh(); historyAdapter.refresh()
+            followPull.setRefreshing(data["followRefreshing"] == true)
+            historyPull.setRefreshing(data["historyRefreshing"] == true)
+        }; sheetRefresh?.invoke(); pages.select(0, false)
     }
     private fun confirmUnfollow() {
         val popup = beginSheet("取消关注", side = false, heightPx = dp(164) + safeBottom)
@@ -422,5 +625,5 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
         popup.panel.addView(action("followFilled", "确定取消") { onAction("unfollow", null); popup.dismiss() }, LinearLayout.LayoutParams(-1, dp(48)))
     }
     private fun showMessageActions(text: String) { choose("弹幕操作", listOf("复制", "屏蔽该关键词"), -1) { onAction(if (it == 0) "copyMessage" else "addShield", text) } }
-    fun dispose() { disposed = true; clearSheet(); pager.dispose(); lists.values.forEach { it.adapter = null }; chat.clear(); NativeAvatar.clear(avatar); video.dispose() }
+    fun dispose() { disposed = true; clearSheet(); pager.dispose(); lists.values.forEach { it.adapter = null }; chat.clear(); unreadChat.clear(); NativeAvatar.clear(avatar); video.dispose() }
 }

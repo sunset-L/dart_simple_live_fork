@@ -116,6 +116,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   var countdown = 60.obs;
 
   Timer? autoExitTimer;
+  DateTime? _autoExitDeadline;
 
   /// 设置的自动关闭时间（分钟）
   var autoExitMinutes = 60.obs;
@@ -128,6 +129,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// 是否处于后台
   var isBackground = false;
+  bool _backgroundPlaybackSuspended = false;
 
   /// 直播间加载失败
   var loadError = false.obs;
@@ -147,6 +149,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   Worker? _nativeRoomWorker;
   Worker? _nativeFollowWorker;
   final _historyLiveStatus = ManualLiveStatusCache();
+  bool _nativeFollowRefreshing = false;
+  bool _nativeHistoryRefreshing = false;
 
   @override
   Map<String, dynamic> get nativePageData => {
@@ -183,8 +187,16 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         'autoExitCountdown': countdown.value,
         'follows': _nativeFollows,
         'history': _nativeHistory,
+        'followRefreshing': _nativeFollowRefreshing,
+        'historyRefreshing': _nativeHistoryRefreshing,
         'qualities': qualites.map((e) => e.quality).toList(),
         'qualityIndex': currentQuality,
+        'playbackSuspended': _backgroundPlaybackSuspended,
+        'preparingPlayback': !_backgroundPlaybackSuspended &&
+            !loadError.value &&
+            !_recoveryStopped &&
+            ((!detailLoaded.value && !_shouldAdoptStream) ||
+                (liveStatus.value && lineConnecting.value)),
         'lineCount': playUrls.length,
         'lineIndex': playingLineIndex.value,
         'floatingEnabled': floatingEnabled,
@@ -204,11 +216,13 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
             .toList(),
         'status': loadError.value
             ? errorInfo.title
-            : !detailLoaded.value
-                ? '正在加载直播间…'
-                : !liveStatus.value
-                    ? '主播未开播'
-                    : '',
+            : errorMsg.value.isNotEmpty
+                ? errorMsg.value
+                : !detailLoaded.value
+                    ? '正在加载直播间…'
+                    : !liveStatus.value
+                        ? '主播未开播'
+                        : '',
       };
 
   List<Map<String, dynamic>> _nativeFollows = [];
@@ -280,17 +294,49 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     syncNativePage();
   }
 
-  Future<void> _refreshNativeHistory() async {
-    final queries = <String, Future<bool> Function()>{};
-    for (final item in DBService.instance.getHistores().take(20)) {
-      final source = Sites.allSites[item.siteId];
-      if (source != null) {
-        queries[item.id] =
-            () => source.liveSite.getLiveStatus(roomId: item.roomId);
-      }
+  Future<void> _refreshNativeFollow() async {
+    if (_disposed || _nativeFollowRefreshing) return;
+    _nativeFollowRefreshing = true;
+    syncNativePage();
+    try {
+      await _reloadNativeRooms(refresh: true);
+    } catch (e) {
+      Log.logPrint(e);
+      if (!_disposed) _showToast('关注列表刷新失败');
+    } finally {
+      _nativeFollowRefreshing = false;
+      if (!_disposed) syncNativePage();
     }
-    await _historyLiveStatus.refresh(queries);
-    if (!_disposed) await _reloadNativeRooms();
+  }
+
+  Future<void> _refreshNativeHistory() async {
+    if (_disposed || _backgroundPlaybackSuspended || _nativeHistoryRefreshing) {
+      return;
+    }
+    final generation = _playbackGeneration;
+    _nativeHistoryRefreshing = true;
+    syncNativePage();
+    try {
+      final queries = <String, Future<bool> Function()>{};
+      for (final item in DBService.instance.getHistores().take(20)) {
+        final source = Sites.allSites[item.siteId];
+        if (source != null) {
+          queries[item.id] = () async {
+            // 后台/切房后不再启动尚未开始的状态请求。
+            if (!_isPlaybackCurrent(generation)) throw StateError('刷新已取消');
+            return source.liveSite.getLiveStatus(roomId: item.roomId);
+          };
+        }
+      }
+      await _historyLiveStatus.refresh(queries);
+      if (!_disposed) await _reloadNativeRooms();
+    } catch (e) {
+      Log.logPrint(e);
+      if (!_disposed) _showToast('历史直播状态刷新失败');
+    } finally {
+      _nativeHistoryRefreshing = false;
+      if (!_disposed) syncNativePage();
+    }
   }
 
   @override
@@ -305,8 +351,32 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   @override
+  void onNativePageOpenFailed(Object error) {
+    if (_disposed || _closingLiveRoom) return;
+    _backgroundPlaybackSuspended = true;
+    _playbackGeneration++;
+    _cancelUrlRefresh();
+    stopHealthCheck();
+    liveDanmaku.stop();
+    unawaited(nativePlayer.stop().catchError((e) {
+      Log.logPrint(e);
+    }));
+    _showToast('播放页初始化失败，请重新进入');
+    Get.back();
+  }
+
+  @override
   void onNativePageAction(String action, dynamic value) {
-    if (_disposed || fullScreenTransitioning.value) return;
+    if (_disposed) return;
+    if (action == 'background') {
+      _suspendBackgroundPlayback();
+      return;
+    }
+    if (action == 'foreground') {
+      _resumeBackgroundPlayback();
+      return;
+    }
+    if (fullScreenTransitioning.value) return;
     final settings = AppSettingsController.instance;
     switch (action) {
       case 'roomListLocked':
@@ -336,8 +406,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       case 'share':
         share();
         return;
-      case 'screenshot':
-        unawaited(saveScreenshot());
+      case 'playbackInfo':
+        unawaited(showDebugInfo());
         return;
       case 'copyMessage':
         if (value is String) Utils.copyToClipboard(value);
@@ -358,7 +428,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         unawaited(_refreshNativeHistory());
         return;
       case 'reloadFollow':
-        unawaited(_reloadNativeRooms(refresh: true));
+        unawaited(_refreshNativeFollow());
         return;
       case 'rooms':
         unawaited(_reloadNativeRooms()
@@ -384,6 +454,16 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       case 'addShield':
         if (value is String && value.isNotEmpty) {
           settings.addShieldList(value);
+        }
+        return;
+      case 'autoExitChanged':
+        if (value is Map) {
+          autoExitEnable.value = value['enabled'] == true;
+          autoExitMinutes.value = (value['minutes'] as num?)?.toInt() ?? 60;
+          AppSettingsController.instance
+              .setRoomAutoExitDuration(autoExitMinutes.value);
+          setAutoExit();
+          syncNativePage();
         }
         return;
       case 'autoExitSettings':
@@ -433,6 +513,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       loadError,
       detailLoaded,
       liveStatus,
+      lineConnecting,
+      errorMsg,
       superChats,
       roomPopularity,
       followed,
@@ -496,12 +578,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
     if (_shouldAdoptStream) {
       // 退出小窗：画面输出从悬浮窗 Surface 切回原生播放页，
-      // 播放器实例、解码器、网络连接全部不动，因此没有黑屏与 loading。
+      // 不重建播放器和网络流；旧帧保留到新输出收到首帧。
       isFloating.value = false;
       isPlayerHandedOver = false;
       await FloatingSession.instance.detachKeepAlive();
       if (_disposed) return;
-      nativePlayer.exitFloating().catchError((e) {
+      nativePlayer.exitFloating(handoverToPage: true).catchError((e) {
         Log.logPrint(e);
       });
       loadData();
@@ -549,14 +631,33 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       return;
     }
     autoExitTimer?.cancel();
-    countdown.value = autoExitMinutes.value * 60;
-    autoExitTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      countdown.value -= 1;
+    _autoExitDeadline =
+        DateTime.now().add(Duration(minutes: autoExitMinutes.value));
+    _resumeAutoExitCountdown();
+  }
+
+  void _resumeAutoExitCountdown() {
+    autoExitTimer?.cancel();
+    if (!autoExitEnable.value ||
+        _autoExitDeadline == null ||
+        _backgroundPlaybackSuspended) {
+      return;
+    }
+    void tick() {
+      final remaining =
+          _autoExitDeadline!.difference(DateTime.now()).inMilliseconds;
+      countdown.value = remaining > 0 ? (remaining / 1000).ceil() : 0;
       if (countdown.value <= 0) {
-        timer.cancel();
-        showAutoExitPrompt();
+        autoExitTimer?.cancel();
+        _autoExitDeadline = null;
+        unawaited(showAutoExitPrompt());
       }
-    });
+    }
+
+    tick();
+    if (_autoExitDeadline != null) {
+      autoExitTimer = Timer.periodic(const Duration(seconds: 1), (_) => tick());
+    }
   }
 
   bool _autoExitPromptShowing = false;
@@ -666,6 +767,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// 接收到WebSocket信息
   void onWSMessage(LiveMessage msg) {
+    if (_backgroundPlaybackSuspended) return;
     if (msg.type == LiveMessageType.chat) {
       if (messages.length >= 200) {
         messages.removeAt(0);
@@ -779,6 +881,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         coverUrl.value = detail.value!.cover;
       }
       liveStatus.value = detail.value!.status || detail.value!.isRecord;
+      // 详情、取流、缓冲共用一次加载过程，详情就绪时不能先隐藏加载环。
+      if (liveStatus.value && !_shouldAdoptStream) _beginLineConnection();
       // 标记「信息已到手」，页面据此区分「加载中」与「确实未开播」
       detailLoaded.value = true;
       if (liveStatus.value) {
@@ -1335,6 +1439,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   @override
+  bool get allowPlaybackWakelock => !_backgroundPlaybackSuspended;
+
+  @override
   void onPlaybackPlayingChanged(bool playing) {
     if (!playing) {
       _stablePlaybackTimer?.cancel();
@@ -1485,6 +1592,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       generation == _playbackGeneration && _canResumePlayback;
   bool get _canResumePlayback =>
       !_closingLiveRoom &&
+      !_backgroundPlaybackSuspended &&
       (!_disposed ||
           (isPlayerHandedOver &&
               _floatingRefreshHandler != null &&
@@ -2055,15 +2163,13 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   Future<void> showAutoExitSheet() async {
-    final result = await nativePlayer.showPlayerDialog('autoExitSettings',
+    if (AppSettingsController.instance.autoExitEnable.value &&
+        !delayAutoExit.value) {
+      _showToast('已设置了全局定时关闭');
+      return;
+    }
+    await nativePlayer.showPlayerDialog('autoExitSettings',
         {'enabled': autoExitEnable.value, 'minutes': autoExitMinutes.value});
-    if (_disposed || result is! Map) return;
-    autoExitEnable.value = result['enabled'] == true;
-    autoExitMinutes.value = (result['minutes'] as num?)?.toInt() ?? 60;
-    AppSettingsController.instance
-        .setRoomAutoExitDuration(autoExitMinutes.value);
-    setAutoExit();
-    syncNativePage();
   }
 
   void _showToast(String text) {
@@ -2177,28 +2283,57 @@ ${error is Error ? (error as Error).stackTrace : ""}''');
     _showToast("已复制错误信息");
   }
 
+  void _suspendBackgroundPlayback() {
+    if (_disposed ||
+        _backgroundPlaybackSuspended ||
+        isPlayerHandedOver ||
+        isFloating.value ||
+        FloatingSession.instance.isFloating.value) {
+      return;
+    }
+    isBackground = true;
+    _backgroundPlaybackSuspended = true;
+    // 让已经发出的取流请求失效，防止结果在后台重新启动播放器。
+    _playbackGeneration++;
+    _resetPlaybackRecovery();
+    _cancelUrlRefresh();
+    stopHealthCheck();
+    liveDanmaku.stop();
+    _liveDurationTimer?.cancel();
+    _nativeMessageTimer?.cancel();
+    _nativeMessageTimer = null;
+    _pendingNativeMessages.clear();
+    superChats.clear();
+    autoExitTimer?.cancel();
+    unawaited(nativePlayer.stop().catchError((e) {
+      Log.logPrint(e);
+    }));
+    unawaited(nativePlayer.clearFullscreenDanmaku().catchError((e) {
+      Log.logPrint(e);
+    }));
+    unawaited(WakelockPlus.disable());
+    syncNativePage();
+  }
+
+  void _resumeBackgroundPlayback() {
+    if (_disposed || !_backgroundPlaybackSuspended || _closingLiveRoom) return;
+    _backgroundPlaybackSuspended = false;
+    isBackground = false;
+    _shouldAdoptStream = false;
+    _resumeAutoExitCountdown();
+    // 停流后旧 URL 可能已失效，重新获取详情、取流并重新连接弹幕。
+    refreshRoom();
+    syncNativePage();
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-
-    if (state == AppLifecycleState.paused) {
-      Log.d("进入后台");
-      //进入后台，关闭弹幕
-      unawaited(nativePlayer.clearFullscreenDanmaku().catchError((e) {
-        Log.logPrint(e);
-      }));
-      isBackground = true;
-    } else
-    //返回前台
-    if (state == AppLifecycleState.resumed) {
-      Log.d("返回前台");
-      isBackground = false;
-
-      // 回到前台时 app 可能已经挂起很久，取流地址极可能失效，
-      // 直接把健康度基线重置，让后续检查按最新进度判定，
-      // 避免把「刚恢复还没起播」误判为停滞。
-      resetHealthCheck();
-      _restorePlaybackWakelock();
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _suspendBackgroundPlayback();
+    } else if (state == AppLifecycleState.resumed) {
+      _resumeBackgroundPlayback();
     }
   }
 

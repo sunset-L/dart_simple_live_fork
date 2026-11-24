@@ -359,6 +359,10 @@ class FloatingPlayerWindow(
         }
     }
 
+    fun captureFrame(): android.graphics.Bitmap? =
+        rootView?.let { root -> (0 until root.childCount).map { root.getChildAt(it) }
+            .filterIsInstance<TextureView>().firstOrNull()?.bitmap }
+
     fun show(width: Int, height: Int): Boolean {
         if (isShowing) {
             return true
@@ -408,6 +412,11 @@ class FloatingPlayerWindow(
             ViewGroup.LayoutParams.MATCH_PARENT
         )
         container.addView(video, videoLp)
+        val heldFrame = ImageView(context).apply {
+            scaleType = ImageView.ScaleType.FIT_XY
+            setImageBitmap(manager.captureFullscreenFrame())
+        }
+        container.addView(heldFrame, FrameLayout.LayoutParams(-1, -1))
 
         video.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             private var outputSurface: Surface? = null
@@ -430,7 +439,17 @@ class FloatingPlayerWindow(
                 return true
             }
 
-            override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {}
+            override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {
+                // 新输出实际更新后才移除旧帧，不使用固定延迟猜测解码完成时间。
+                // TextureView 更新回调可发生在 dispatchGetDisplayList 遍历子节点期间。
+                // 必须排到消息队列，不在绘制栈里修改 ViewGroup 的 children 数组。
+                if (heldFrame.parent === container) container.post {
+                    if (heldFrame.parent === container) {
+                        container.removeView(heldFrame)
+                        heldFrame.setImageDrawable(null)
+                    }
+                }
+            }
         }
 
         // 圆角裁切

@@ -15,13 +15,18 @@ object NativeAvatar {
     private val cache = object : LruCache<String, Bitmap>(2 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
+    private var placeholder: Bitmap? = null
     private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     fun clear(view: ImageView) { view.tag = null; view.setImageDrawable(null) }
-    fun load(view: ImageView, url: String) {
+    fun load(view: ImageView, source: String) {
+        val url = if (source.startsWith("//")) "https:$source" else source
         if (view.tag == url) return
         view.tag = url
-        view.setImageDrawable(NativeIcons.drawable("rooms", android.graphics.Color.LTGRAY))
+        if (placeholder == null) placeholder = runCatching {
+            view.context.assets.open("flutter_assets/assets/images/logo.png").use { BitmapFactory.decodeStream(it) }
+        }.getOrNull()
+        view.setImageBitmap(placeholder)
         if (!url.startsWith("https://") && !url.startsWith("http://")) return
         cache.get(url)?.let { view.setImageBitmap(it); return }
         val target = java.lang.ref.WeakReference(view)

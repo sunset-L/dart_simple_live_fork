@@ -98,6 +98,10 @@ class AppPages {
     GetPage(
       name: RoutePath.kLiveRoomDetail,
       page: () => const LiveRoomPage(),
+      // 原生页负责左右推入/推出；业务路由不重复动画，避免露出占位页。
+      opaque: true,
+      transition: Transition.noTransition,
+      transitionDuration: Duration.zero,
       binding: BindingsBuilder.put(
         () => LiveRoomController(
           pSite: Get.arguments,

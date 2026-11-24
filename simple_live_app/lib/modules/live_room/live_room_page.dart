@@ -13,6 +13,9 @@ class LiveRoomPage extends GetView<LiveRoomController> {
         onPopInvokedWithResult: (didPop, _) async {
           if (!didPop) await controller.handleBackPressed();
         },
-        child: const ColoredBox(color: Colors.black),
+        child: ColoredBox(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          child: const SizedBox.expand(),
+        ),
       );
 }
