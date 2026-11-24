@@ -17,6 +17,7 @@ import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/modules/live_room/live_room_error.dart';
 import 'package:simple_live_app/modules/live_room/player/player_controller.dart';
 import 'package:simple_live_app/services/native_player_bridge.dart';
+import 'package:simple_live_app/services/manual_live_status_cache.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
 import 'package:simple_live_app/routes/route_path.dart';
@@ -50,6 +51,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   late Rx<String> rxRoomId;
   String get roomId => rxRoomId.value;
 
+  // 只缓存刚刚移交小窗的同一房间资料；接回画面不等网络详情。
+  static MapEntry<String, LiveRoomDetail>? _floatingDetail;
   Rx<LiveRoomDetail?> detail = Rx<LiveRoomDetail?>(null);
   String get displayUserName {
     final name = detail.value?.userName ?? '';
@@ -142,6 +145,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   Timer? _liveDurationTimer;
 
   Worker? _nativeRoomWorker;
+  Worker? _nativeFollowWorker;
+  final _historyLiveStatus = ManualLiveStatusCache();
 
   @override
   Map<String, dynamic> get nativePageData => {
@@ -149,6 +154,17 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         'title': detail.value?.title ?? '直播间',
         'roomKey': '${site.id}_$roomId',
         'dark': Get.isDarkMode,
+        'backgroundColor': Get.theme.scaffoldBackgroundColor.toARGB32(),
+        'cardColor': Get.theme.cardColor.toARGB32(),
+        'sheetColor': (Get.theme.bottomSheetTheme.backgroundColor ??
+                Get.theme.colorScheme.surfaceContainerLow)
+            .toARGB32(),
+        'foregroundColor':
+            (Get.theme.textTheme.bodyLarge?.color ?? Colors.black).toARGB32(),
+        'primaryColor': Get.theme.colorScheme.primary.toARGB32(),
+        'siteId': site.id,
+        'roomId': roomId,
+        'siteLogo': site.logo,
         'roomListLocked': LocalStorageService.instance
             .getValue(LocalStorageService.kPlayerRoomListLocked, true),
         'accent': AppSettingsController.instance.styleColor.value,
@@ -163,6 +179,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         'chatGap': AppSettingsController.instance.chatTextGap.value,
         'chatBubble': AppSettingsController.instance.chatBubbleStyle.value,
         'durationText': liveDuration.value,
+        'autoExitEnabled': autoExitEnable.value,
+        'autoExitCountdown': countdown.value,
         'follows': _nativeFollows,
         'history': _nativeHistory,
         'qualities': qualites.map((e) => e.quality).toList(),
@@ -223,12 +241,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   Future<void> _reloadNativeRooms({bool refresh = false}) async {
     if (refresh) await FollowService.instance.loadData();
     if (_disposed) return;
-    _nativeFollows = FollowService.instance.followList
+    _nativeFollows = FollowService.instance.liveList
         .map((item) => {
               'siteId': item.siteId,
               'roomId': item.roomId,
               'userName': item.userName,
+              'avatar': item.face,
+              'liveStartTime': item.liveStartTime,
               'siteName': Sites.allSites[item.siteId]?.name ?? item.siteId,
+              'siteLogo': Sites.allSites[item.siteId]?.logo ?? '',
               'status': item.liveStatus.value == 2
                   ? '直播中'
                   : item.liveStatus.value == 1
@@ -236,17 +257,40 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
                       : '未知',
             })
         .toList();
-    _nativeHistory = DBService.instance
-        .getHistores()
-        .take(20)
-        .map((item) => {
-              'siteId': item.siteId,
-              'roomId': item.roomId,
-              'userName': item.userName,
-              'siteName': Sites.allSites[item.siteId]?.name ?? item.siteId,
-            })
-        .toList();
+    final history = <Map<String, dynamic>>[];
+    for (final item in DBService.instance.getHistores().take(20)) {
+      final cached = _historyLiveStatus[item.id];
+      final status = cached == null ? null : await cached;
+      history.add({
+        'siteId': item.siteId,
+        'roomId': item.roomId,
+        'userName': item.userName,
+        'avatar': item.face,
+        'siteName': Sites.allSites[item.siteId]?.name ?? item.siteId,
+        'siteLogo': Sites.allSites[item.siteId]?.logo ?? '',
+        'status': status == null
+            ? '未知'
+            : status
+                ? '直播中'
+                : '未开播',
+      });
+    }
+    if (_disposed) return;
+    _nativeHistory = history;
     syncNativePage();
+  }
+
+  Future<void> _refreshNativeHistory() async {
+    final queries = <String, Future<bool> Function()>{};
+    for (final item in DBService.instance.getHistores().take(20)) {
+      final source = Sites.allSites[item.siteId];
+      if (source != null) {
+        queries[item.id] =
+            () => source.liveSite.getLiveStatus(roomId: item.roomId);
+      }
+    }
+    await _historyLiveStatus.refresh(queries);
+    if (!_disposed) await _reloadNativeRooms();
   }
 
   @override
@@ -292,6 +336,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       case 'share':
         share();
         return;
+      case 'screenshot':
+        unawaited(saveScreenshot());
+        return;
+      case 'copyMessage':
+        if (value is String) Utils.copyToClipboard(value);
+        return;
       case 'copyRoom':
         copyUrl();
         return;
@@ -303,6 +353,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         return;
       case 'openApp':
         openNaviteAPP();
+        return;
+      case 'reloadHistory':
+        unawaited(_refreshNativeHistory());
         return;
       case 'reloadFollow':
         unawaited(_reloadNativeRooms(refresh: true));
@@ -358,6 +411,16 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   @override
   void onInit() {
     WidgetsBinding.instance.addObserver(this);
+    final cached = _floatingDetail;
+    if (cached?.key == '${site.id}_$roomId' &&
+        FloatingSession.instance.isSameRoom(site, roomId)) {
+      detail.value = cached!.value;
+      detailLoaded.value = true;
+      liveStatus.value = cached.value.status || cached.value.isRecord;
+      roomPopularity.value = cached.value.online;
+    }
+    _nativeFollowWorker = ever(FollowService.instance.liveList,
+        (_) => unawaited(_reloadNativeRooms()));
     if (FollowService.instance.followList.isEmpty) {
       FollowService.instance.loadData();
     }
@@ -374,6 +437,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       roomPopularity,
       followed,
       liveDuration,
+      autoExitEnable,
+      countdown,
       videoAspectRatio,
       AppSettingsController.instance.chatTextSize,
       AppSettingsController.instance.chatTextGap,
@@ -1766,6 +1831,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         return false;
       }
       if (success) {
+        final currentDetail = detail.value;
+        if (currentDetail != null) {
+          _floatingDetail = MapEntry('${site.id}_$roomId', currentDetail);
+        }
         isFloating.value = true;
         // 播放器所有权移交给悬浮窗：此后即使控制器被销毁也不能释放播放器
         isPlayerHandedOver = true;
@@ -1836,7 +1905,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   ///   视频实例由原生播放器持有，画面继续在小窗里播，不中断。
   /// - TV 端：不启用悬浮窗，直接返回
   Future<void> handleBackPressed() async {
-    if (_disposed || _closingLiveRoom) return;
+    if (_disposed || _closingLiveRoom || fullScreenTransitioning.value) return;
+    if (await nativePlayer.dismissPlayerOverlay()) return;
+    if (_disposed) return;
     if (fullScreenState.value) {
       exitFull();
       return;
@@ -2166,6 +2237,8 @@ ${error is Error ? (error as Error).stackTrace : ""}''');
   void onClose() {
     _disposed = true;
     _nativeRoomWorker?.dispose();
+    _nativeFollowWorker?.dispose();
+    _historyLiveStatus.dispose();
     _nativeMessageTimer?.cancel();
     _pendingNativeMessages.clear();
     _stablePlaybackTimer?.cancel();

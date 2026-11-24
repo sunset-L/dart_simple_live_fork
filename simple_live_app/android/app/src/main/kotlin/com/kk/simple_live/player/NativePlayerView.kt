@@ -1,7 +1,6 @@
 package com.kk.simple_live.player
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.Context
 import android.graphics.Color
 import android.media.AudioManager
@@ -36,19 +35,19 @@ class NativePlayerView(
         useController = false
         isClickable = false
         isFocusable = false
-        setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+        setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
         setKeepContentOnPlayerReset(true)
     }
+    private val loading = NativePlayerLoading(activity).apply { visibility = GONE }
     private val danmaku = DanmakuOverlayView(activity)
     private val topBar = LinearLayout(activity)
     private val bottomBar = LinearLayout(activity)
     private var floating: ImageButton? = null
-    private val avatar = android.widget.ImageView(activity)
     private val subtitle = TextView(activity)
     private val durationText = TextView(activity)
     private val qualityChip = TextView(activity)
     private val lineChip = TextView(activity)
-    private val danmakuSettings = icon("settings", "弹幕设置") { showSettings() }
+    private val danmakuSettings = icon("danmakuSettings", "弹幕设置") { onShowPanel("danmakuSettings") }
     private val info = icon("info", "播放信息") { showMetrics() }
     private var safeInsets = intArrayOf(0, 0, 0, 0)
     private var fullscreen = false
@@ -60,16 +59,13 @@ class NativePlayerView(
     private val superChat = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
     private val seenSC = linkedSetOf<String>()
     private val scTimers = mutableMapOf<String, Runnable>()
-    private val lock = icon("lock", "锁定控件") { setLocked(!locked) }
-    private val play = icon("pause", "播放 / 暂停") {
-        player.playWhenReady = !player.playWhenReady
-    }
+    private val lock = icon("unlock", "锁定控件") { setLocked(!locked) }
     private val danmakuButton = icon("danmaku", "弹幕开关") {
         onAction("danmaku", if (data["danmakuEnabled"] == true) 0 else 1)
     }
     private var data: Map<*, *> = emptyMap<Any, Any>()
     private var locked = false
-    private var dialog: AlertDialog? = null
+    var onShowPanel: (String) -> Unit = {}
     private val originalBrightness = activity.window.attributes.screenBrightness
     private val hideControls = Runnable { setControlsVisible(false) }
     private val audio = activity.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -80,7 +76,7 @@ class NativePlayerView(
     private var dragging = false
     private val playerListener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
-            play.setImageDrawable(NativeIcons.drawable(if (player.playWhenReady) "pause" else "play"))
+            updateLoading()
         }
     }
 
@@ -88,6 +84,7 @@ class NativePlayerView(
         setBackgroundColor(Color.BLACK)
         addView(video, LayoutParams(-1, -1))
         addView(danmaku, LayoutParams(-1, -1))
+        addView(loading, LayoutParams(dp(36), dp(36), Gravity.CENTER))
         addView(superChat, LayoutParams(dp(240), -2, Gravity.START or Gravity.BOTTOM).apply {
             leftMargin = dp(24); bottomMargin = dp(64)
         })
@@ -103,29 +100,27 @@ class NativePlayerView(
             android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
             intArrayOf(0xBB000000.toInt(), 0x00000000))
         topBar.addView(icon("back", "返回") { onAction(if (fullscreen) "exit" else "back", null) }, LinearLayout.LayoutParams(dp(44), dp(44)))
-        avatar.scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
-        avatar.background = NativeIcons.background(0xFF303030.toInt(), dp(20).toFloat())
-        avatar.clipToOutline = true
-        topBar.addView(avatar, LinearLayout.LayoutParams(dp(40), dp(40)).apply { rightMargin = dp(10) })
-        val headings = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-        title.setTextColor(Color.WHITE); title.textSize = 16f
-        title.maxLines = 1; title.ellipsize = TextUtils.TruncateAt.END
-        title.includeFontPadding = false; title.gravity = Gravity.CENTER_VERTICAL
-        subtitle.setTextColor(Color.LTGRAY); subtitle.textSize = 12f
-        subtitle.maxLines = 1; subtitle.ellipsize = TextUtils.TruncateAt.END
-        headings.addView(title, LinearLayout.LayoutParams(-1, dp(24)))
-        headings.addView(subtitle, LinearLayout.LayoutParams(-1, dp(20)))
-        topBar.addView(headings, LinearLayout.LayoutParams(0, -2, 1f))
+        title.setTextColor(Color.WHITE); title.textSize = 16f; title.maxLines = 1
+        title.ellipsize = TextUtils.TruncateAt.END; title.includeFontPadding = false
+        topBar.addView(title, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(12) })
+        subtitle.setTextColor(Color.LTGRAY); subtitle.textSize = 12f; subtitle.maxLines = 1
+        val flame = NativeIcons.drawable("fire", Color.LTGRAY); flame.setBounds(0, 0, dp(16), dp(16))
+        subtitle.setCompoundDrawables(flame, null, null, null); subtitle.compoundDrawablePadding = dp(4)
+        topBar.addView(subtitle, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(8); rightMargin = dp(8) })
         topBar.addView(icon("rooms", "关注 / 历史") { onAction("rooms", null) }, LinearLayout.LayoutParams(dp(44), dp(44)))
         floating = icon("floating", "小窗播放") { onAction("floating", null) }.also {
             topBar.addView(it, LinearLayout.LayoutParams(dp(44), dp(44))) }
-        topBar.addView(icon("more", "更多设置") { showMore() }, LinearLayout.LayoutParams(dp(44), dp(44)))
+        topBar.addView(icon("more", "播放设置") { showSettings() }, LinearLayout.LayoutParams(dp(44), dp(44)))
         addView(topBar, LayoutParams(-1, dp(64), Gravity.TOP))
+        runCatching {
+            val bitmap = activity.assets.open("flutter_assets/assets/icons/icon_danmaku_setting.png").use { android.graphics.BitmapFactory.decodeStream(it) }
+            danmakuSettings.setImageDrawable(android.graphics.drawable.BitmapDrawable(resources, bitmap).apply { setTint(Color.WHITE) })
+        }
         bottomBar.gravity = Gravity.CENTER_VERTICAL
         bottomBar.background = android.graphics.drawable.GradientDrawable(
             android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
             intArrayOf(0x00000000, 0xDD000000.toInt()))
-        for (button in listOf(play, icon("refresh", "刷新") { onAction("refresh", null) }, danmakuButton, danmakuSettings, info)) {
+        for (button in listOf(icon("refresh", "刷新") { onAction("refresh", null) }, danmakuButton, danmakuSettings, info)) {
             bottomBar.addView(button, LinearLayout.LayoutParams(dp(44), dp(44)))
         }
         durationText.textSize = 14f; durationText.setTextColor(Color.WHITE)
@@ -138,14 +133,14 @@ class NativePlayerView(
         bottomBar.addView(lineChip, LinearLayout.LayoutParams(-2, dp(32)).apply { rightMargin = dp(8) })
         bottomBar.addView(expand, LinearLayout.LayoutParams(dp(44), dp(44)))
         addView(bottomBar, LayoutParams(-1, dp(48), Gravity.BOTTOM))
-        lock.background = NativeIcons.background(0x77000000, dp(8).toFloat())
         addView(lock, LayoutParams(dp(40), dp(40), Gravity.END or Gravity.CENTER_VERTICAL).apply { rightMargin = dp(12) })
         tip.setTextColor(Color.WHITE)
         tip.textSize = 18f
         tip.gravity = Gravity.CENTER
-        tip.setBackgroundColor(0x99000000.toInt())
+        tip.background = NativeIcons.background(0xFF212121.toInt(), dp(12).toFloat())
+        tip.setPadding(dp(12), dp(12), dp(12), dp(12))
         tip.visibility = GONE
-        addView(tip, LayoutParams(dp(220), dp(54), Gravity.CENTER))
+        addView(tip, LayoutParams(-2, -2, Gravity.CENTER))
         player.addListener(playerListener)
         setFullscreen(false)
     }
@@ -157,7 +152,7 @@ class NativePlayerView(
         val wide = fullscreen && w > dp(560)
         durationText.visibility = if (wide) VISIBLE else GONE
         info.visibility = if (wide) VISIBLE else GONE
-        danmakuSettings.visibility = if (wide) VISIBLE else GONE
+        danmakuSettings.visibility = VISIBLE
         lineChip.visibility = if (wide) VISIBLE else GONE
     }
 
@@ -182,14 +177,8 @@ class NativePlayerView(
         lock.layoutParams = LayoutParams(dp(40), dp(40), Gravity.END or Gravity.CENTER_VERTICAL).apply { rightMargin = right + dp(12) }
     }
 
-    fun showQuality() = choose("画质", (data["qualities"] as? List<*>)?.map { it.toString() } ?: emptyList(),
-        (data["qualityIndex"] as? Number)?.toInt() ?: -1) { onAction("quality", it) }
-    fun showLines() {
-        val count = (data["lineCount"] as? Number)?.toInt() ?: 0
-        choose("线路", List(count.coerceIn(0, 100)) { "线路 ${it + 1}" },
-            (data["lineIndex"] as? Number)?.toInt() ?: -1) { onAction("line", it) }
-    }
-
+    fun showQuality() = onShowPanel("quality")
+    fun showLines() = onShowPanel("line")
     private fun icon(name: String, label: String, action: () -> Unit) =
         NativeIcons.button(activity, name, label) { action(); scheduleHide() }.apply {
             val inset = dp(11)
@@ -204,9 +193,9 @@ class NativePlayerView(
         expand.contentDescription = if (value) "退出全屏" else "全屏"
         lock.setImageDrawable(NativeIcons.drawable("lock"))
         setControlsVisible(true)
-        danmaku.visibility = if (data["danmakuEnabled"] == true) VISIBLE else GONE
-        play.visibility = if (value) GONE else VISIBLE
-        danmakuSettings.visibility = if (value) VISIBLE else GONE
+        danmaku.visibility = if (value && data["danmakuEnabled"] == true) VISIBLE else GONE
+        qualityChip.visibility = if (value) VISIBLE else GONE
+        danmakuSettings.visibility = VISIBLE
         info.visibility = if (value) VISIBLE else GONE
         durationText.visibility = if (value) VISIBLE else GONE
         lineChip.visibility = if (value) VISIBLE else GONE
@@ -215,49 +204,26 @@ class NativePlayerView(
         if (!value) { clearSuperChat(); stopMetrics() }
     }
 
-    fun showMore() {
-        val entries = mutableListOf(
-            Triple("rooms", "关注 / 历史", { onAction("rooms", null) }),
-            Triple("share", "分享", { onAction("share", null) }),
-            Triple("info", "播放信息", { showMetrics() }),
-            Triple("quality", "画质", { showQuality() }),
-            Triple("line", "线路", { showLines() }),
-            Triple("settings", "弹幕设置", { showSettings() }),
-            Triple("info", "定时关闭", { onAction("autoExitSettings", null) }),
-            Triple("share", "复制链接", { onAction("copyRoom", null) }),
-            Triple("share", "复制直链", { onAction("copyStream", null) }),
-            Triple("rooms", "平台客户端", { onAction("openApp", null) }))
-        if (data["status"]?.toString()?.isNotEmpty() == true) entries.add(Triple("info", "复制错误信息", { onAction("copyError", null) }))
-        if (data["floatingEnabled"] == true) entries.add(Triple("floating", "小窗播放", { onAction("floating", null) }))
-        val grid = android.widget.GridLayout(activity).apply { columnCount = 3; setPadding(dp(12), dp(8), dp(12), dp(8)) }
-        dialog?.dismiss()
-        for ((name, label, action) in entries) {
-            val button = TextView(activity).apply {
-                text = label; textSize = 13f; gravity = Gravity.CENTER; setTextColor(Color.DKGRAY)
-                val image = NativeIcons.drawable(name, Color.DKGRAY)
-                image.setBounds(0, 0, dp(24), dp(24))
-                setCompoundDrawables(null, image, null, null); compoundDrawablePadding = dp(8)
-                setPadding(dp(4), dp(8), dp(4), dp(8))
-                setOnClickListener { dialog?.dismiss(); action() }
-            }
-            grid.addView(button, android.widget.GridLayout.LayoutParams().apply {
-                width = 0; height = dp(76); columnSpec = android.widget.GridLayout.spec(android.widget.GridLayout.UNDEFINED, 1f) })
-        }
-        val popup = AlertDialog.Builder(activity).setTitle("更多操作").setView(grid).setNegativeButton("关闭", null).create()
-        presentDialog(popup)
-    }
+    fun showMore() = onShowPanel("more")
 
     private fun setLocked(value: Boolean) {
         locked = value
-        lock.setImageDrawable(NativeIcons.drawable(if (locked) "unlock" else "lock"))
+        lock.setImageDrawable(NativeIcons.drawable(if (locked) "lock" else "unlock"))
         lock.contentDescription = if (locked) "解锁控件" else "锁定控件"
         setControlsVisible(!locked)
     }
 
     private fun setControlsVisible(visible: Boolean) {
-        topBar.visibility = if (visible && !locked && fullscreen) VISIBLE else GONE
-        bottomBar.visibility = if (visible && !locked) VISIBLE else GONE
-        lock.visibility = if (fullscreen && (visible || locked)) VISIBLE else GONE
+        fun slide(view: View, shown: Boolean, x: Float = 0f, y: Float = 0f) {
+            view.animate().cancel()
+            if (shown && view.visibility != VISIBLE) { view.translationX = x; view.translationY = y }
+            view.visibility = VISIBLE
+            view.animate().translationX(if (shown) 0f else x).translationY(if (shown) 0f else y)
+                .setDuration(200).withEndAction { if (!shown) view.visibility = GONE }.start()
+        }
+        slide(topBar, visible && !locked && fullscreen, y = -(dp(64) + safeInsets[1]).toFloat())
+        slide(bottomBar, visible && !locked, y = (dp(64) + safeInsets[3]).toFloat())
+        slide(lock, fullscreen && (visible || locked), x = dp(64).toFloat())
         if (visible) scheduleHide()
     }
 
@@ -267,18 +233,19 @@ class NativePlayerView(
     }
 
     fun update(values: Map<*, *>) {
+        val optionsChanged = listOf("fontSize", "fontWeight", "opacity", "area", "duration", "topMargin", "bottomMargin").any { data[it] != values[it] }
         data = values
-        title.text = values["userName"]?.toString() ?: "直播间"
-        subtitle.text = "${values["title"] ?: ""}  ·  热度 ${values["popularity"] ?: "0"}"
-        NativeAvatar.load(avatar, values["avatar"]?.toString() ?: "")
+        title.text = "${values["title"] ?: "直播间"} - ${values["userName"] ?: ""}"
+        subtitle.text = values["popularity"]?.toString() ?: "0"
         durationText.text = values["durationText"]?.toString() ?: "00:00:00"
         val selected = (values["qualityIndex"] as? Number)?.toInt() ?: -1
         val qualities = values["qualities"] as? List<*> ?: emptyList<Any>()
         qualityChip.text = qualities.getOrNull(selected)?.toString() ?: "画质"
         val line = (values["lineIndex"] as? Number)?.toInt() ?: -1
         lineChip.text = if (line >= 0) "线路 ${line + 1}" else "线路"
-        status.text = values["status"]?.toString() ?: ""
+        status.text = (values["status"]?.toString() ?: "").takeUnless { it.startsWith("正在加载") } ?: ""
         status.visibility = if (status.text.isEmpty()) GONE else VISIBLE
+        updateLoading()
         floating?.visibility = if (values["floatingEnabled"] == true) VISIBLE else GONE
         danmakuButton.setImageDrawable(NativeIcons.drawable(if (values["danmakuEnabled"] == true) "danmaku" else "danmakuOff"))
         val mode = (values["scaleMode"] as? Number)?.toInt() ?: 0
@@ -294,14 +261,19 @@ class NativePlayerView(
             ?.setAspectRatio(if (ratio > 0f) ratio else player.videoSize.let {
                 if (it.height > 0) it.width * it.pixelWidthHeightRatio / it.height else 0f
             })
-        danmaku.visibility = if (values["danmakuEnabled"] == true) VISIBLE else GONE
+        danmaku.visibility = if (fullscreen && values["danmakuEnabled"] == true) VISIBLE else GONE
         if (danmaku.visibility == GONE) danmaku.clearAll()
         updateSuperChat(values)
-        danmaku.applyOptions(
+        if (optionsChanged) danmaku.applyOptions(
             number("fontSize", 16f), number("fontWeight", 4f).toInt(),
             number("opacity", 1f), number("area", .8f), number("duration", 10f).toInt(),
             number("topMargin", 0f), number("bottomMargin", 0f), 80,
         )
+    }
+
+    private fun updateLoading() {
+        val active = player.mediaItemCount > 0
+        loading.visibility = if (player.playbackState == Player.STATE_BUFFERING || (!active && data["status"]?.toString()?.startsWith("正在加载") == true)) VISIBLE else GONE
     }
 
     private fun updateSuperChat(values: Map<*, *>) {
@@ -368,28 +340,6 @@ class NativePlayerView(
 
     fun clearDanmaku() { danmaku.clearAll() }
 
-    private fun choose(title: String, items: List<String>, selected: Int,
-                       onSelect: (Int) -> Unit) {
-        if (items.isEmpty()) {
-            android.widget.Toast.makeText(activity, "暂无$title，请刷新直播间", android.widget.Toast.LENGTH_SHORT).show()
-            return
-        }
-        removeCallbacks(hideControls)
-        dialog?.dismiss()
-        val popup = AlertDialog.Builder(activity).setTitle(title)
-            .setSingleChoiceItems(items.toTypedArray(), selected.coerceIn(-1, items.lastIndex)) { popup, index ->
-                popup.dismiss()
-                onSelect(index)
-            }.setNegativeButton("取消", null).create()
-        presentDialog(popup)
-    }
-
-    private fun presentDialog(popup: AlertDialog) {
-        dialog = popup
-        popup.setOnDismissListener { if (dialog === popup) { dialog = null; scheduleHide() } }
-        popup.show()
-    }
-
     private fun stopMetrics() {
         if (metricsText == null) return
         metricsText?.let { removeView(it) }
@@ -427,28 +377,7 @@ class NativePlayerView(
         refreshMetrics.run()
     }
 
-    fun showSettings() {
-        choose("播放设置", listOf("画面比例", "弹幕字号", "弹幕区域", "弹幕透明度", "弹幕速度", "关键词屏蔽", "弹幕上下边距", "弹幕字重"), -1) {
-            when (it) {
-                0 -> choose("画面比例", listOf("适应", "拉伸", "铺满", "16:9", "4:3"),
-                    number("scaleMode", 0f).toInt()) { value -> onAction("scale", value) }
-                1 -> chooseNumber("弹幕字号", "fontSize", listOf(12, 16, 20, 24, 28, 32))
-                2 -> chooseNumber("弹幕区域（百分比）", "area", listOf(25, 50, 75, 100), true)
-                3 -> chooseNumber("弹幕透明度（百分比）", "opacity", listOf(25, 50, 75, 100), true)
-                4 -> chooseNumber("弹幕滚动时长（秒）", "duration", listOf(5, 8, 10, 12, 15))
-                5 -> onAction("shieldSettings", null)
-                6 -> choose("弹幕边距", listOf("顶部", "底部"), -1) { edge ->
-                    chooseNumber("边距（逻辑像素）", if (edge == 0) "topMargin" else "bottomMargin", listOf(0, 12, 24, 48, 72)) }
-                7 -> chooseNumber("弹幕字重", "fontWeight", listOf(1, 2, 3, 4, 5, 6, 7, 8, 9))
-            }
-        }
-    }
-
-    private fun chooseNumber(title: String, key: String, values: List<Int>, percent: Boolean = false) {
-        choose(title, values.map { it.toString() }, -1) {
-            onAction(key, if (percent) values[it] / 100.0 else values[it])
-        }
-    }
+    fun showSettings() = onShowPanel("playerSettings")
 
     private val detector = GestureDetector(activity,
         object : GestureDetector.SimpleOnGestureListener() {
@@ -512,12 +441,10 @@ class NativePlayerView(
     }
 
     fun dispose() {
-        dialog?.dismiss()
-        dialog = null
         stopMetrics()
         clearSuperChat()
         removeCallbacks(hideControls)
-        NativeAvatar.clear(avatar)
+        for (view in listOf(topBar, bottomBar, lock)) view.animate().cancel()
         player.removeListener(playerListener)
         danmaku.clearAll()
         activity.window.attributes = activity.window.attributes.apply {

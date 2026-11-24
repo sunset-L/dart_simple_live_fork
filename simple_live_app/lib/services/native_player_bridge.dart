@@ -299,6 +299,9 @@ class NativePlayerBridge {
       _activity.invokeMethod<void>('setPlayerFullscreen',
           {'fullscreen': fullscreen, 'landscape': landscape});
 
+  Future<bool> dismissPlayerOverlay() async =>
+      await _activity.invokeMethod<bool>('dismissPlayerOverlay') ?? false;
+
   Future<void> updatePlayerPage(Map<String, dynamic> data) =>
       _activity.invokeMethod<void>('updatePlayerPage', data);
 

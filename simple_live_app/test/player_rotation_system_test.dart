@@ -121,7 +121,7 @@ void main() {
     ]);
   });
 
-  test('竖屏和全屏共用原生弹幕，关闭开关时不发送', () async {
+  test('仅全屏且开启弹幕时发送，竖屏不增加叠加层开销', () async {
     final controller = _SystemProbe();
     const item = FloatingDanmakuItem(text: '测试', color: 0xffffffff);
     controller.addDanmaku([item]);
@@ -130,11 +130,16 @@ void main() {
     controller.showDanmakuState.value = true;
     controller.addDanmaku([item]);
     await Future<void>.delayed(Duration.zero);
+    expect(calls, isEmpty);
     controller.fullScreenState.value = true;
     controller.addDanmaku([item]);
     await Future<void>.delayed(Duration.zero);
     expect(
         calls.map((e) => e.method), everyElement('addPlayerFullscreenDanmaku'));
-    expect(calls.length, 2);
+    expect(calls.length, 1);
+    controller.showDanmakuState.value = false;
+    controller.addDanmaku([item]);
+    await Future<void>.delayed(Duration.zero);
+    expect(calls.length, 1);
   });
 }

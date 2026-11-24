@@ -18,7 +18,7 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // 初始化原生播放器（MethodChannel / EventChannel / 纹理输出）
+        // 初始化原生播放器（MethodChannel / EventChannel / 原生视图输出）
         NativePlayerManager.instance.attach(this, flutterEngine)
 
         // 供 Dart 侧在 Activity 重建后重新绑定
@@ -27,7 +27,7 @@ class MainActivity : FlutterActivity() {
             "simple_live/activity"
         )
         fun host(): NativePlayerHost = playerHost ?: NativePlayerHost(
-            this, flutterEngine.renderer,
+            this,
             onBars = { hidden -> playerSystemBarsHidden = hidden; applyPlayerSystemBars() },
             onAction = { action, value ->
                 channel.invokeMethod("playerPageAction", mapOf("action" to action, "value" to value))
@@ -42,6 +42,7 @@ class MainActivity : FlutterActivity() {
                 "closePlayerPage" -> {
                     host().close(result)
                 }
+                "dismissPlayerOverlay" -> result.success(playerHost?.dismissOverlay() == true)
                 "openPlayerPage" -> {
                     val data = call.arguments as? Map<*, *>
                     if (data == null) result.error("INVALID_ARGUMENT", "全屏页面参数无效", null)

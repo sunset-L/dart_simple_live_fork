@@ -162,7 +162,7 @@ mixin PlayerStateMixin on PlayerMixin {
 
 mixin PlayerDanmakuMixin on PlayerStateMixin {
   void addDanmaku(List<FloatingDanmakuItem> items) {
-    if (!showDanmakuState.value || items.isEmpty) {
+    if (!fullScreenState.value || !showDanmakuState.value || items.isEmpty) {
       return;
     }
     unawaited(nativePlayer.addFullscreenDanmaku(items).catchError((e) {

@@ -5,14 +5,11 @@ import android.content.pm.ActivityInfo
 import android.view.View
 import android.widget.FrameLayout
 import io.flutter.embedding.android.FlutterView
-import io.flutter.embedding.engine.renderer.FlutterRenderer
-import io.flutter.embedding.engine.renderer.FlutterUiDisplayListener
 import io.flutter.plugin.common.MethodChannel
 
 /** 进房到离房只有一个原生页面、一个 PlayerView。横竖屏不切换 Flutter Surface 或视频输出。 */
 class NativePlayerHost(
     private val activity: Activity,
-    private val renderer: FlutterRenderer,
     private val onBars: (Boolean) -> Unit,
     private val onAction: (String, Any?) -> Unit,
 ) {
@@ -21,13 +18,9 @@ class NativePlayerHost(
     private var flutter: FlutterView? = null
     private var page: NativeLiveRoomPage? = null
     private var originalOrientation: Int? = null
-    private var frameListener: FlutterUiDisplayListener? = null
-    private var closeResult: MethodChannel.Result? = null
-    private var closeTimeout: Runnable? = null
     val fullscreen: Boolean get() = page?.fullscreen == true
 
     fun open(data: Map<*, *>, result: MethodChannel.Result) {
-        if (closeResult != null) finishClose()
         if (page != null) { update(data); result.success(null); return }
         val flutterView = (0 until content.childCount).map { content.getChildAt(it) }
             .filterIsInstance<FlutterView>().singleOrNull()
@@ -44,6 +37,8 @@ class NativePlayerHost(
         roomPage.update(data)
         content.addView(roomPage, FrameLayout.LayoutParams(-1, -1))
         manager.attachFullscreenView(roomPage.video.video)
+        // 两个 SurfaceView 的层级不由普通 View 的前后顺序保证。
+        // 播放期间始终隔离 Flutter Surface，只在真正离房时恢复。
         flutterView.visibility = View.GONE
         onBars(false)
         roomPage.requestFocus()
@@ -65,32 +60,12 @@ class NativePlayerHost(
     }
 
     fun close(result: MethodChannel.Result) {
-        if (page == null) { result.success(null); return }
-        if (closeResult != null) { result.error("PLAYER_BUSY", "正在关闭播放页", null); return }
-        closeResult = result
-        manager.clearFullscreenOrientation()
-        originalOrientation?.let { activity.requestedOrientation = it }
-        onBars(false)
-        val listener = object : FlutterUiDisplayListener {
-            override fun onFlutterUiDisplayed() { finishClose() }
-            override fun onFlutterUiNoLongerDisplayed() = Unit
-        }
-        frameListener = listener
-        // 监听器可能同步报告已显示；先注册兜底，完成关闭时一并撤销。
-        closeTimeout = Runnable { finishClose() }.also { content.postDelayed(it, 2000L) }
-        renderer.addIsDisplayingFlutterUiListener(listener)
-        if (closeResult == null) return
-        // 仅离开整个播放页才恢复 Flutter；后台/系统中断时保证业务路由不被永久锁住。
-        flutter?.visibility = View.VISIBLE
-        flutter?.requestLayout()
-    }
-
-    private fun finishClose() {
-        val result = closeResult ?: return
-        closeResult = null
+        // 不把返回绑在 Flutter 首帧事件上：Surface 已显示时不会再次触发该事件，
+        // 旧方案会一直保留冻结的原生页直到 2 秒兜底超时。
         dispose()
         result.success(null)
     }
+    fun dismissOverlay(): Boolean = page?.dismissOverlay() == true
 
     fun update(data: Map<*, *>) { page?.update(data) }
     fun replaceMessages(items: List<*>) { page?.clearMessages(); page?.addMessages(items) }
@@ -104,10 +79,6 @@ class NativePlayerHost(
     }
 
     fun dispose() {
-        frameListener?.let { renderer.removeIsDisplayingFlutterUiListener(it) }
-        frameListener = null
-        closeTimeout?.let { content.removeCallbacks(it) }
-        closeTimeout = null
         page?.let {
             manager.detachFullscreenView(it.video.video)
             it.dispose()
@@ -120,7 +91,5 @@ class NativePlayerHost(
         originalOrientation?.let { activity.requestedOrientation = it }
         originalOrientation = null
         onBars(false)
-        closeResult?.error("ACTIVITY_CLOSED", "播放页已关闭", null)
-        closeResult = null
     }
 }
