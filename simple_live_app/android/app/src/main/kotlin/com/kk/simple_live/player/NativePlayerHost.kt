@@ -8,7 +8,7 @@ import android.content.pm.ActivityInfo
 import android.graphics.RectF
 import android.view.View
 import android.view.ViewTreeObserver
-import android.view.animation.AccelerateDecelerateInterpolator
+import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import io.flutter.embedding.android.FlutterView
 import io.flutter.embedding.engine.renderer.FlutterRenderer
@@ -53,14 +53,17 @@ class NativePlayerHost(
         val cover = entryCover
         val flutterView = flutter
         val animator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 300L
-            interpolator = AccelerateDecelerateInterpolator()
+            duration = NativePlayerNavigationMotion.DURATION_MS
+            // 使用原始时间分别计算主页面/底层页的 Cupertino 曲线，不做对称慢进慢出。
+            interpolator = LinearInterpolator()
             addUpdateListener { animation ->
-                val progress = animation.animatedValue as Float
+                val time = animation.animatedValue as Float
+                val progress = NativePlayerNavigationMotion.pageProgress(entering, time)
                 // 每帧按当前宽度计算，配置变化时不留下旧屏幕宽度的偏移。
                 val width = content.width.toFloat()
                 roomPage.translationX = width * if (entering) 1f - progress else progress
-                cover?.translationX = -width * 0.3f * if (entering) progress else 1f - progress
+                cover?.translationX = -width * NativePlayerNavigationMotion.PARALLAX *
+                    NativePlayerNavigationMotion.coveredProgress(entering, time)
             }
         }
         navigationAnimator = animator
@@ -82,7 +85,7 @@ class NativePlayerHost(
                 content.viewTreeObserver.removeOnPreDrawListener(this)
                 navigationPreDraw = null
                 if (entering) roomPage.translationX = content.width.toFloat()
-                else cover?.translationX = -content.width * 0.3f
+                else cover?.translationX = -content.width * NativePlayerNavigationMotion.PARALLAX
                 animator.start()
                 return true
             }
