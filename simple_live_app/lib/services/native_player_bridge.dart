@@ -280,7 +280,38 @@ class SystemVolumeState {
 /// 全应用只有一个原生播放器实例，播放页和悬浮窗共用同一条流，
 /// 因此「页面 → 悬浮窗」切换不需要重新取流。
 class NativePlayerBridge {
-  NativePlayerBridge._();
+  NativePlayerBridge._() {
+    _activity.setMethodCallHandler((call) async {
+      if (call.method == 'playerFullscreenAction' && call.arguments is Map) {
+        final data = call.arguments as Map;
+        final action = data['action'];
+        if (action is String) {
+          onFullscreenAction?.call(action, data['value'] as num?);
+        }
+      }
+    });
+  }
+
+  void Function(String action, num? value)? onFullscreenAction;
+
+  Future<void> setInlinePlayer(bool active) =>
+      _activity.invokeMethod<void>('setPlayerInline', active);
+
+  Future<void> showFullscreenPlayer(Map<String, dynamic> data) =>
+      _activity.invokeMethod<void>('showPlayerFullscreen', data);
+
+  Future<void> hideFullscreenPlayer() =>
+      _activity.invokeMethod<void>('hidePlayerFullscreen');
+
+  Future<void> updateFullscreenPlayer(Map<String, dynamic> data) =>
+      _activity.invokeMethod<void>('updatePlayerFullscreen', data);
+
+  Future<void> clearFullscreenDanmaku() =>
+      _activity.invokeMethod<void>('clearPlayerFullscreenDanmaku');
+
+  Future<void> addFullscreenDanmaku(List<FloatingDanmakuItem> items) =>
+      _activity.invokeMethod<void>('addPlayerFullscreenDanmaku',
+          items.map((e) => {'text': e.text, 'color': e.color}).toList());
 
   static final NativePlayerBridge instance = NativePlayerBridge._();
 
@@ -431,12 +462,6 @@ class NativePlayerBridge {
     } catch (_) {
       // 旧原生实现没有这个方法时静默忽略
     }
-  }
-
-  /// 仅隐藏或显示系统栏，不切换窗口的 edge-to-edge 布局策略。
-  /// 与方向请求分开，系统自动横屏时也能全屏而不锁定方向。
-  Future<void> setSystemBarsHidden(bool hidden) async {
-    await _activity.invokeMethod<void>("setPlayerSystemBarsHidden", hidden);
   }
 
   /// 播放器全屏方向控制

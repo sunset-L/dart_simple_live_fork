@@ -30,6 +30,7 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.ui.PlayerView
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -43,8 +44,8 @@ import io.flutter.view.TextureRegistry
  *
  * 架构要点：
  * 1. 全应用只有一个 ExoPlayer 实例，直播页与悬浮窗共用同一条网络流与解码器。
- * 2. 页内画面走 Flutter 外部纹理（SurfaceTexture），悬浮窗走自己窗口里的 TextureView。
- * 3. 输出目标由 [applySurface] 按「悬浮窗 > 页内纹理」的优先级自动决定，
+ * 2. 竖屏页内画面走 Flutter 外部纹理，全屏页走独立的原生 PlayerView，小窗走 TextureView。
+ * 3. 输出目标由 [applySurface] 按「悬浮窗 > 原生全屏页 > 页内纹理」的优先级自动决定，
  *    所以「页面 → 小窗」「小窗 → 页面」只是换输出，不重新取流、不重建播放器。
  *
  * 【为什么页内不用 PlatformView + SurfaceView】
@@ -106,6 +107,22 @@ class NativePlayerManager private constructor() {
     private var pendingFloatingTap = false
 
     private var player: ExoPlayer? = null
+    private var fullscreenView: PlayerView? = null
+
+    fun attachFullscreenView(view: PlayerView) {
+        fullscreenView = view
+        applySurface()
+    }
+
+    fun detachFullscreenView(view: PlayerView) {
+        if (fullscreenView !== view) return
+        view.player = null
+        fullscreenView = null
+        boundSurface = null
+        applySurface()
+    }
+
+    fun fullscreenPlayer(): ExoPlayer? = ensurePlayer()
 
     /** 页内画面输出（Flutter 外部纹理） */
     private var pageSurface: Surface? = null
@@ -372,6 +389,7 @@ class NativePlayerManager private constructor() {
      * pendingFloatingTap，等新引擎的 Dart 侧订阅时补发。
      */
     fun detachActivity() {
+        fullscreenView?.let { detachFullscreenView(it) }
         deviceOrientationListener?.disable()
         deviceOrientationListener = null
         stopLandscapeOrientationChanges()
@@ -472,6 +490,11 @@ class NativePlayerManager private constructor() {
         orientationBeforeFullscreen = null
         windowOrientationBeforeFullscreen = null
         windowRotationBeforeFullscreen = null
+    }
+
+    fun clearFullscreenOrientation() {
+        stopLandscapeOrientationChanges()
+        clearOrientationRestore()
     }
 
     private fun finishOrientationRestore(act: Activity) {
@@ -939,31 +962,7 @@ class NativePlayerManager private constructor() {
             }
 
             // 主动读一次播放参数（面板刚打开、或事件还没到时用）
-            "getPlaybackMetrics" -> {
-                reloadMetricsFromTracks()
-                val bitrate =
-                    if (measuredBitrate > 0) measuredBitrate else declaredBitrate.toLong()
-                val frameRate =
-                    if (measuredFrameRate > 0f) measuredFrameRate else declaredFrameRate
-                result.success(
-                    mapOf(
-                        // 面板展示的是**编码**尺寸，和显示尺寸分开存，
-                        // 避免 1920×1088 这种宏块对齐值污染布局用的字段。
-                        "width" to metricsWidth,
-                        "height" to metricsHeight,
-                        "aspectRatio" to videoAspect,
-                        "videoBitrate" to bitrate,
-                        "frameRate" to frameRate,
-                        "videoCodec" to videoCodec,
-                        "audioCodec" to audioCodec,
-                        "audioChannels" to audioChannels,
-                        "audioSampleRate" to audioSampleRate,
-                        "bitrateMeasured" to (measuredBitrate > 0),
-                        "frameRateMeasured" to (measuredFrameRate > 0f),
-                        "url" to (currentUrl ?: ""),
-                    )
-                )
-            }
+            "getPlaybackMetrics" -> result.success(readPlaybackMetrics())
 
             "setFloatingWindowSettings" -> {
                 val args = arguments as? Map<*, *>
@@ -1448,6 +1447,21 @@ class NativePlayerManager private constructor() {
         ) {}
     }
 
+    fun readPlaybackMetrics(): Map<String, Any> {
+        reloadMetricsFromTracks()
+        return mapOf(
+            "width" to metricsWidth, "height" to metricsHeight,
+            "aspectRatio" to videoAspect,
+            "videoBitrate" to if (measuredBitrate > 0) measuredBitrate else declaredBitrate.toLong(),
+            "frameRate" to if (measuredFrameRate > 0f) measuredFrameRate else declaredFrameRate,
+            "videoCodec" to videoCodec, "audioCodec" to audioCodec,
+            "audioChannels" to audioChannels, "audioSampleRate" to audioSampleRate,
+            "bitrateMeasured" to (measuredBitrate > 0),
+            "frameRateMeasured" to (measuredFrameRate > 0f),
+            "url" to (currentUrl ?: ""),
+        )
+    }
+
     /** 开/关播放参数采集。关闭后不再采集也不再回调 Dart。 */
     fun setMetricsListening(listening: Boolean) {
         metricsListening = listening
@@ -1713,11 +1727,18 @@ class NativePlayerManager private constructor() {
 
     /**
      * 按优先级选出输出目标并绑定。
-     * 优先级：悬浮窗 > 页内纹理。
+     * 优先级：悬浮窗 > 原生全屏页 > 页内纹理。
      * 这样「页面销毁」或「小窗关闭」任一事件发生时，输出都会自动落到另一方。
      */
     private fun applySurface() {
         val exoPlayer = player ?: return
+        val fullscreen = fullscreenView
+        if (fullscreen != null && floatingSurface == null) {
+            boundSurface = null
+            if (fullscreen.player !== exoPlayer) fullscreen.player = exoPlayer
+            return
+        }
+        if (fullscreen?.player != null) fullscreen.player = null
         val target = floatingSurface ?: pageSurface
         if (target === boundSurface) {
             return

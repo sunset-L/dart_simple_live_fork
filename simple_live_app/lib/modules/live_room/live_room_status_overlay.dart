@@ -10,7 +10,6 @@ class LiveRoomStatusOverlay extends StatelessWidget {
   final String? description;
   final VoidCallback onRefresh;
   final VoidCallback? onCopyError;
-  final VoidCallback? onExitFullScreen;
 
   const LiveRoomStatusOverlay({
     required this.userName,
@@ -19,7 +18,6 @@ class LiveRoomStatusOverlay extends StatelessWidget {
     required this.onRefresh,
     this.description,
     this.onCopyError,
-    this.onExitFullScreen,
     super.key,
   });
 
@@ -100,16 +98,6 @@ class LiveRoomStatusOverlay extends StatelessWidget {
               ),
             ),
           ),
-          if (onExitFullScreen != null)
-            Positioned(
-              top: 8,
-              left: 8,
-              child: IconButton(
-                onPressed: onExitFullScreen,
-                tooltip: '退出全屏',
-                icon: const Icon(Icons.arrow_back, color: Colors.white70),
-              ),
-            ),
         ],
       ),
     );

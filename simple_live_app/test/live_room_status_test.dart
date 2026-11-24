@@ -42,7 +42,7 @@ class _TestLiveRoomController extends LiveRoomController {
   }
 
   @override
-  void exitFull() {
+  Future<void> exitFull() async {
     fullScreenState.value = false;
   }
 }
@@ -251,7 +251,7 @@ void main() {
     expect(controller.copiedErrors, 1);
   });
 
-  testWidgets('解析和网络异常在播放区域显示中文提示，横屏及全屏可正常返回', (tester) async {
+  testWidgets('解析和网络异常显示中文提示，原生全屏退出后竖屏布局恢复', (tester) async {
     final controller = await _showPage(tester);
     for (final error in [
       const FormatException('missing room data'),
@@ -273,8 +273,10 @@ void main() {
     expect(tester.takeException(), isNull);
     controller.fullScreenState.value = true;
     await tester.pumpAndSettle();
-    expect(find.byTooltip('退出全屏'), findsOneWidget);
-    await tester.tap(find.byTooltip('退出全屏'));
+    // Flutter 不再提供全屏控件；模拟原生退出回调和窗口恢复。
+    expect(find.byTooltip('退出全屏'), findsNothing);
+    await controller.exitFull();
+    tester.view.physicalSize = const Size(360, 800);
     await tester.pumpAndSettle();
     expect(controller.fullScreenState.value, isFalse);
     expect(find.byKey(_tabsKey), findsOneWidget);

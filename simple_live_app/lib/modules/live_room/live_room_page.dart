@@ -62,17 +62,19 @@ class LiveRoomPage extends GetView<LiveRoomController> {
             await controller.handleBackPressed();
           }
         },
-        child: Scaffold(
-          resizeToAvoidBottomInset: !controller.fullScreenState.value &&
-              !controller.fullScreenTransitioning.value,
-          body: LiveRoomLayout(
-            fullScreen: controller.fullScreenState.value,
-            landscapeFullScreen: controller.fullScreenLandscape,
-            appBar: appBar,
-            onWindowLandscapeChanged: controller.onWindowLandscapeChanged,
-            player: player,
-            sidebar: sidebar,
-            portraitActions: portraitActions,
+        child: TickerMode(
+          enabled: !controller.fullScreenState.value,
+          child: Scaffold(
+            resizeToAvoidBottomInset: !controller.fullScreenState.value &&
+                !controller.fullScreenTransitioning.value,
+            body: LiveRoomLayout(
+              fullScreen: controller.fullScreenState.value,
+              landscapeFullScreen: controller.fullScreenLandscape,
+              appBar: appBar,
+              player: player,
+              sidebar: sidebar,
+              portraitActions: portraitActions,
+            ),
           ),
         ),
       ),
@@ -83,9 +85,8 @@ class LiveRoomPage extends GetView<LiveRoomController> {
     return Stack(
       children: [
         // 视频画面：ExoPlayer 渲染到 Flutter 外部纹理
-        // 纹理参与 Flutter 合成，弹幕与控件可以直接叠加；悬浮窗只是换一个输出目标
-        //
-        // 播放器在全屏和半屏使用同一挂载位置，key 保持纹理子树的身份。
+        // 这里只绘制竖屏内联画面；全屏视频、弹幕与控件交给原生页面。
+        // 稳定 key 保留内联纹理，输出交接不重建播放器。
         Positioned.fill(
           child: Container(
             key: controller.globalVideoKey,
@@ -120,8 +121,6 @@ class LiveRoomPage extends GetView<LiveRoomController> {
           description: info?.tip,
           onRefresh: controller.refreshRoom,
           onCopyError: failed ? controller.copyErrorDetail : null,
-          onExitFullScreen:
-              controller.fullScreenState.value ? controller.exitFull : null,
         );
       }
       // 纹理会保留上一路流的最后一帧，首帧前用不透明黑底遮挡。

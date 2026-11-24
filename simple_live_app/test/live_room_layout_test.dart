@@ -14,7 +14,6 @@ Widget _page({
   bool landscapeFullScreen = true,
   required Widget player,
   required Widget sidebar,
-  ValueChanged<bool>? onWindowLandscapeChanged,
   MediaQueryData? media,
   Size? layoutSize,
 }) {
@@ -25,7 +24,6 @@ Widget _page({
           fullScreen: fullScreen,
           landscapeFullScreen: landscapeFullScreen,
           appBar: AppBar(key: _headerKey, title: const Text('直播间')),
-          onWindowLandscapeChanged: onWindowLandscapeChanged,
           player: player,
           sidebar: sidebar,
           portraitActions: const SizedBox(
@@ -185,50 +183,40 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('MediaQuery和约束先后变化时按约束显示且只在一致后完成交接', (tester) async {
+  testWidgets('MediaQuery和约束先后变化时只按实际约束布局', (tester) async {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     _setSize(tester, const Size(900, 900));
-    final directions = <bool>[];
     Future<void> page(Size mediaSize, Size layoutSize) => tester.pumpWidget(
           _page(
             fullScreen: false,
             player: const ColoredBox(key: _playerKey, color: Colors.black),
             sidebar: const SizedBox.expand(key: _sidebarKey),
-            onWindowLandscapeChanged: directions.add,
             media: MediaQueryData(size: mediaSize),
             layoutSize: layoutSize,
           ),
         );
 
     await page(_portrait, _portrait);
-    expect(directions, [false]);
     // MediaQuery先转横屏，当前仍是竖屏约束。
     await page(_landscape, _portrait);
     expect(find.byKey(_headerKey), findsOneWidget);
     expect(tester.getSize(find.byKey(_playerKey)), const Size(360, 202.5));
-    expect(directions, [false]);
     await page(_landscape, _landscape);
-    expect(directions, [false, true]);
     // MediaQuery先转竖屏，不能在旧横屏约束里闪回竖屏页。
     await page(_portrait, _landscape);
     expect(find.byKey(_headerKey), findsNothing);
     expect(tester.getSize(find.byKey(_playerKey)), _landscape);
-    expect(directions, [false, true]);
     await page(_portrait, _portrait);
-    expect(directions, [false, true, false]);
-    // 反过来，约束先变时也应立即使用实际布局，不提前完成方向交接。
+    // 反过来，约束先变时也应立即使用实际布局，不使用旧尺寸布局。
     await page(_portrait, _landscape);
     expect(find.byKey(_headerKey), findsNothing);
     expect(tester.getSize(find.byKey(_playerKey)), _landscape);
-    expect(directions, [false, true, false]);
     await page(_landscape, _landscape);
     await page(_landscape, _portrait);
     expect(find.byKey(_headerKey), findsOneWidget);
     expect(tester.getSize(find.byKey(_playerKey)), const Size(360, 202.5));
-    expect(directions, [false, true, false, true]);
     await page(_portrait, _portrait);
-    expect(directions, [false, true, false, true, false]);
     expect(tester.takeException(), isNull);
   });
 
@@ -236,12 +224,10 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     _setSize(tester, _portrait);
-    final directions = <bool>[];
     await tester.pumpWidget(_page(
       fullScreen: false,
       player: const ColoredBox(key: _playerKey, color: Colors.black),
       sidebar: const SizedBox.expand(key: _sidebarKey),
-      onWindowLandscapeChanged: directions.add,
       media: const MediaQueryData(
         size: _portrait,
         viewInsets: EdgeInsets.only(bottom: 560),
@@ -251,7 +237,6 @@ void main() {
     expect(find.byKey(_headerKey), findsOneWidget);
     expect(find.byKey(_portraitActionsKey), findsOneWidget);
     expect(tester.getSize(find.byKey(_playerKey)).height, lessThan(240));
-    expect(directions, [false]);
     expect(tester.takeException(), isNull);
   });
 }

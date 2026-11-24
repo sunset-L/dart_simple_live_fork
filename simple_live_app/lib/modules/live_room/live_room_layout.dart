@@ -2,12 +2,11 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-/// 系统独占旋转动画；页面仅按当前帧约束布局，视频与页内标签保持挂载。
-class LiveRoomLayout extends StatefulWidget {
+/// 竖屏业务页及大屏布局；全屏旋转由 Android 原生页面负责。
+class LiveRoomLayout extends StatelessWidget {
   final bool fullScreen;
   final bool landscapeFullScreen;
   final PreferredSizeWidget? appBar;
-  final ValueChanged<bool>? onWindowLandscapeChanged;
   final Widget player;
   final Widget sidebar;
   final Widget portraitActions;
@@ -16,19 +15,11 @@ class LiveRoomLayout extends StatefulWidget {
     required this.fullScreen,
     this.landscapeFullScreen = true,
     this.appBar,
-    this.onWindowLandscapeChanged,
     required this.player,
     required this.sidebar,
     required this.portraitActions,
     super.key,
   });
-
-  @override
-  State<LiveRoomLayout> createState() => _LiveRoomLayoutState();
-}
-
-class _LiveRoomLayoutState extends State<LiveRoomLayout> {
-  bool? _lastWindowLandscape;
 
   @override
   Widget build(BuildContext context) {
@@ -37,63 +28,51 @@ class _LiveRoomLayoutState extends State<LiveRoomLayout> {
     return LayoutBuilder(builder: (context, constraints) {
       final windowLandscape = media.orientation == Orientation.landscape;
       final layoutLandscape = constraints.maxWidth > constraints.maxHeight;
-      // 键盘只压缩内容高度，不代表窗口横屏。方向与约束一致后才完成交接。
-      if ((windowLandscape == layoutLandscape || media.viewInsets.bottom > 0) &&
-          _lastWindowLandscape != windowLandscape) {
-        _lastWindowLandscape = windowLandscape;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _lastWindowLandscape == windowLandscape) {
-            widget.onWindowLandscapeChanged?.call(windowLandscape);
-          }
-        });
-      }
-      // 显示按当前约束决定，方向完成信号才要求 MediaQuery 与约束一致。
-      // 两者可能先后更新，不能因 MediaQuery 提前转竖屏而在横屏尺寸里
-      // 闪回竖屏页；键盘压缩高度也不能误判成横屏。
-      final fullScreen = layoutLandscape &&
+      // 约束决定实际布局；键盘压缩内容高度不代表横屏。
+      final expandedPlayer = layoutLandscape &&
               (windowLandscape || media.viewInsets.bottom == 0) ||
-          widget.fullScreen && !widget.landscapeFullScreen;
+          fullScreen && !landscapeFullScreen;
 
       Widget pageContent(Widget child) => Offstage(
-            offstage: fullScreen,
+            offstage: expandedPlayer,
             child: TickerMode(
-              enabled: !fullScreen,
+              enabled: !expandedPlayer,
               child: ExcludeFocus(
-                excluding: fullScreen,
+                excluding: expandedPlayer,
                 child: child,
               ),
             ),
           );
 
       return ColoredBox(
-        color: fullScreen
+        color: expandedPlayer
             ? Colors.black
             : Theme.of(context).scaffoldBackgroundColor,
         child: ClipRect(
           child: CustomMultiChildLayout(
             delegate: _LiveRoomLayoutDelegate(
-              fullScreen: fullScreen,
-              headerHeight: widget.appBar == null
+              fullScreen: expandedPlayer,
+              headerHeight: appBar == null
                   ? 0
-                  : widget.appBar!.preferredSize.height + media.padding.top,
+                  : appBar!.preferredSize.height + media.padding.top,
             ),
             children: [
-              if (widget.appBar != null)
+              if (appBar != null)
                 LayoutId(
                   id: _RoomPart.header,
-                  child: pageContent(widget.appBar!),
+                  child: pageContent(appBar!),
                 ),
               LayoutId(
                 id: _RoomPart.actions,
-                child: pageContent(widget.portraitActions),
+                child: pageContent(portraitActions),
               ),
               LayoutId(
                 id: _RoomPart.sidebar,
-                child: pageContent(widget.sidebar),
+                child: pageContent(sidebar),
               ),
               LayoutId(
                 id: _RoomPart.player,
-                child: ClipRect(child: widget.player),
+                child: ClipRect(child: player),
               ),
             ],
           ),

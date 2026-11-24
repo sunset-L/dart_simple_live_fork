@@ -4,15 +4,16 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.kk.simple_live.player.NativePlayerManager
+import com.kk.simple_live.player.NativeFullscreenHost
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
 
-    // 保留 Flutter 默认的 SurfaceView，让系统同步窗口与渲染表面的尺寸交接。
-    // 视频仍是 Flutter 外部纹理，不需要把整页 UI 再放进 TextureView。
+    // 竖屏业务页保留默认 SurfaceView；全屏旋转由完整原生页面接管。
     private var playerSystemBarsHidden = false
+    private var fullscreenHost: NativeFullscreenHost? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -21,24 +22,45 @@ class MainActivity : FlutterActivity() {
         NativePlayerManager.instance.attach(this, flutterEngine)
 
         // 供 Dart 侧在 Activity 重建后重新绑定
-        MethodChannel(
+        val channel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "simple_live/activity"
-        ).setMethodCallHandler { call, result ->
+        )
+        fun host(): NativeFullscreenHost = fullscreenHost ?: NativeFullscreenHost(
+            this, flutterEngine.renderer,
+            onBars = { hidden -> playerSystemBarsHidden = hidden; applyPlayerSystemBars() },
+            onAction = { action, value ->
+                channel.invokeMethod("playerFullscreenAction", mapOf("action" to action, "value" to value))
+            },
+        ).also { fullscreenHost = it }
+        channel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "attachPlayer" -> {
                     NativePlayerManager.instance.attach(this, flutterEngine)
                     result.success(true)
                 }
-                "setPlayerSystemBarsHidden" -> {
-                    val hidden = call.arguments as? Boolean
-                    if (hidden == null) {
-                        result.error("INVALID_ARGUMENT", "系统栏隐藏状态必须为布尔值", null)
-                    } else {
-                        playerSystemBarsHidden = hidden
-                        applyPlayerSystemBars()
-                        result.success(null)
-                    }
+                "setPlayerInline" -> {
+                    val active = call.arguments as? Boolean
+                    if (active == null) result.error("INVALID_ARGUMENT", "页内状态必须为布尔值", null)
+                    else { host().setInline(active); result.success(null) }
+                }
+                "showPlayerFullscreen" -> {
+                    val data = call.arguments as? Map<*, *>
+                    if (data == null) result.error("INVALID_ARGUMENT", "全屏页面参数无效", null)
+                    else host().show(data, result)
+                }
+                "hidePlayerFullscreen" -> host().hide(result)
+                "updatePlayerFullscreen" -> {
+                    (call.arguments as? Map<*, *>)?.let { fullscreenHost?.update(it) }
+                    result.success(null)
+                }
+                "clearPlayerFullscreenDanmaku" -> {
+                    fullscreenHost?.clearDanmaku()
+                    result.success(null)
+                }
+                "addPlayerFullscreenDanmaku" -> {
+                    (call.arguments as? List<*>)?.let { fullscreenHost?.addDanmaku(it) }
+                    result.success(null)
                 }
                 else -> result.notImplemented()
             }
@@ -69,6 +91,8 @@ class MainActivity : FlutterActivity() {
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         // 只解绑 Activity 引用，不释放播放器：
         // 悬浮窗播放时 Activity 可能重建，播放器必须继续存活。
+        fullscreenHost?.dispose()
+        fullscreenHost = null
         NativePlayerManager.instance.detachActivity()
         // 但同时必须把「绑定在这个引擎上」的 Channel / EventSink / 纹理全部清掉。
         // 引擎已经销毁，继续持有那个 sink 会在用户点小窗时往死引擎发消息，

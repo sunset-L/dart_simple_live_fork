@@ -41,11 +41,6 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
-        <!-- 旋转时整页偶现拉伸，Android 页面使用 Skia/OpenGL 兼容渲染路径。
-             保留系统旋转动画和默认 SurfaceView，不在页面侧强制同步缓冲区尺寸。 -->
-        <meta-data
-            android:name="io.flutter.embedding.android.EnableImpeller"
-            android:value="false" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
-import 'package:canvas_danmaku/canvas_danmaku.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:simple_live_app/app/app_style.dart';
 import 'package:simple_live_app/app/constant.dart';
@@ -19,6 +18,9 @@ import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/modules/live_room/live_room_error.dart';
 import 'package:simple_live_app/modules/live_room/player/player_controller.dart';
+import 'package:simple_live_app/modules/live_room/player/player_controls.dart'
+    show showFollowUser;
+import 'package:simple_live_app/services/native_player_bridge.dart';
 import 'package:simple_live_app/modules/settings/danmu_settings_page.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/routes/route_path.dart';
@@ -149,12 +151,88 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   var liveDuration = "00:00:00".obs;
   Timer? _liveDurationTimer;
 
+  Worker? _nativeRoomWorker;
+
+  @override
+  Map<String, dynamic> get nativeFullscreenData => {
+        ...super.nativeFullscreenData,
+        'title': detail.value?.title ?? '直播间',
+        'qualities': qualites.map((e) => e.quality).toList(),
+        'qualityIndex': currentQuality,
+        'lineCount': playUrls.length,
+        'lineIndex': playingLineIndex.value,
+        'floatingEnabled': floatingEnabled,
+        'superChatEnabled':
+            AppSettingsController.instance.playershowSuperChat.value,
+        'superChats': superChats
+            .map((sc) => {
+                  'key':
+                      '${sc.startTime.millisecondsSinceEpoch}_${sc.userName}_${sc.message}',
+                  'text': '${sc.userName} ¥${sc.price}\n${sc.message}',
+                  'color': sc.backgroundColor,
+                  'endTime': sc.endTime.millisecondsSinceEpoch,
+                })
+            .toList(),
+        'status': loadError.value
+            ? errorInfo.title
+            : !detailLoaded.value
+                ? '正在加载直播间…'
+                : !liveStatus.value
+                    ? '主播未开播'
+                    : '',
+      };
+
+  @override
+  void onNativeFullscreenAction(String action, num? value) {
+    if (!fullScreenState.value || fullScreenTransitioning.value) return;
+    switch (action) {
+      case 'quality':
+        if (value != null) changePlayQuality(value.toInt());
+        return;
+      case 'line':
+        if (value != null) changePlayLine(value.toInt());
+        return;
+      case 'refresh':
+        refreshRoom();
+        return;
+      case 'rooms':
+      case 'floating':
+      case 'danmakuSettings':
+        unawaited(_openInlinePlayerAction(action));
+        return;
+    }
+    super.onNativeFullscreenAction(action, value);
+  }
+
+  Future<void> _openInlinePlayerAction(String action) async {
+    await exitFull();
+    if (_disposed || fullScreenState.value) return;
+    if (action == 'danmakuSettings') {
+      showDanmuSettingsSheet();
+    } else if (action == 'rooms') {
+      showFollowUser(this);
+    } else if (action == 'floating' && await enterFloatingWindow()) {
+      Get.back();
+    }
+  }
+
   @override
   void onInit() {
     WidgetsBinding.instance.addObserver(this);
     if (FollowService.instance.followList.isEmpty) {
       FollowService.instance.loadData();
     }
+    _nativeRoomWorker = everAll([
+      detail,
+      qualites,
+      _currentQuality,
+      playUrls,
+      playingLineIndex,
+      loadError,
+      detailLoaded,
+      liveStatus,
+      superChats,
+    ], (_) => syncNativeFullscreen());
     initAutoExit();
     showDanmakuState.value = AppSettingsController.instance.danmuEnable.value;
     followed.value = DBService.instance.getFollowExist("${site.id}_$roomId");
@@ -426,14 +504,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       }
 
       addDanmaku([
-        DanmakuContentItem(
-          msg.message,
+        FloatingDanmakuItem(
+          text: msg.message,
           color: Color.fromARGB(
             255,
             msg.color.r,
             msg.color.g,
             msg.color.b,
-          ),
+          ).toARGB32(),
         ),
       ]);
     } else if (msg.type == LiveMessageType.online) {
@@ -1781,7 +1859,6 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         padding: AppStyle.edgeInsetsA12,
         children: [
           DanmuSettingsView(
-            danmakuController: danmakuController,
             showFloatingEntry: false,
             onTapDanmuShield: () {
               Get.back();
@@ -2155,8 +2232,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     liveDanmaku.stop();
     messages.clear();
     superChats.clear();
-    danmakuController?.clear();
 
+    unawaited(nativePlayer.clearFullscreenDanmaku().catchError((e) {
+      Log.logPrint(e);
+    }));
     // 重新设置LiveDanmaku
     liveDanmaku = site.liveSite.getDanmaku();
 
@@ -2200,7 +2279,9 @@ ${error is Error ? (error as Error).stackTrace : ""}''');
     if (state == AppLifecycleState.paused) {
       Log.d("进入后台");
       //进入后台，关闭弹幕
-      danmakuController?.clear();
+      unawaited(nativePlayer.clearFullscreenDanmaku().catchError((e) {
+        Log.logPrint(e);
+      }));
       isBackground = true;
     } else
     //返回前台
@@ -2250,6 +2331,7 @@ ${error is Error ? (error as Error).stackTrace : ""}''');
   @override
   void onClose() {
     _disposed = true;
+    _nativeRoomWorker?.dispose();
     _stablePlaybackTimer?.cancel();
     _retryTimer?.cancel();
     _cancelUrlRefresh();
@@ -2259,7 +2341,6 @@ ${error is Error ? (error as Error).stackTrace : ""}''');
 
     stopHealthCheck();
     liveDanmaku.stop();
-    danmakuController = null;
     _liveDurationTimer?.cancel(); // 页面关闭时取消定时器
 
     // 进入悬浮窗时，页面销毁不能释放播放器，否则小窗会黑屏。

@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
-import 'package:canvas_danmaku/canvas_danmaku.dart';
 import 'package:volume_controller/volume_controller.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
@@ -40,12 +39,9 @@ mixin PlayerMixin {
   /// 此时宁可退回 width/height 相除（会轻微失真，但绝不会把画面压扁）。
   static const double kMaxAspectDeviation = 3.0;
 
-  GlobalKey globalDanmuKey = GlobalKey();
-
   /// 视频画面层的 GlobalKey
   ///
-  /// 全屏和半屏在同一 Scaffold 中调整播放区尺寸。
-  /// 保留稳定的 key，布局或父节点更新时继续复用纹理子树。
+  /// 保留竖屏内联纹理的 key；原生全屏输出交接不重建这个子树。
   GlobalKey globalVideoKey = GlobalKey();
 
   /// 当前视频宽高比，供 UI 自适应
@@ -67,96 +63,7 @@ mixin PlayerMixin {
   /// 就能判断是签名过期、鉴权失败还是取流降级。
   RxString currentPlayUrl = "".obs;
 
-  // ------------------------------------------------ 播放参数面板
-  //
-  // 「打开时才采集、关闭就停」的两段式设计：
-  // UI 侧只管调 [openMetricsPanel] / [closeMetricsPanel]，
-  // 这里负责与原生同步开关，并在关闭时把订阅与定时器都取消掉。
-
-  /// 播放参数面板是否打开
-  var metricsPanelVisible = false.obs;
-
-  /// 最新的播放参数
-  Rxn<PlaybackMetrics> playbackMetrics = Rxn<PlaybackMetrics>();
-
-  /// 面板期间额外的轮询定时器
-  ///
-  /// Format 回调只在编码参数**变化**时触发，直播长时间稳定播放时
-  /// 不会有新事件；而码率是浮动的，用户看面板时希望看到变化，
-  /// 所以面板打开期间补一个低频轮询。关闭面板时立刻取消。
-  Timer? _metricsPollTimer;
-
-  /// 打开播放参数面板：开始采集
-  Future<void> openMetricsPanel() async {
-    if (metricsPanelVisible.value) {
-      return;
-    }
-    metricsPanelVisible.value = true;
-    playbackMetrics.value = null;
-    // 指标事件统一由 initStream 里那一条常驻订阅接收（见 metrics 分支），
-    // 这里不再单独订阅一次：两条订阅会各自收到同一个事件，
-    // 关闭面板时还要各自取消，纯属多余。
-    // 先主动读一次，覆盖「流已播很久、Format 回调早就不再来」的情况。
-    final initial = await nativePlayer.getPlaybackMetrics();
-    if (initial != null && metricsPanelVisible.value) {
-      playbackMetrics.value = initial;
-    }
-    await nativePlayer.setMetricsListening(true);
-    // 低频补刷。码率/帧率是实测值，会持续变化，1 秒刷一次既跟得上又不费电。
-    _metricsPollTimer?.cancel();
-    _metricsPollTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
-      if (!metricsPanelVisible.value) {
-        return;
-      }
-      final m = await nativePlayer.getPlaybackMetrics();
-      if (m != null && metricsPanelVisible.value) {
-        playbackMetrics.value = m;
-      }
-    });
-  }
-
-  /// 关闭播放参数面板：彻底停止采集
-  ///
-  /// 需求明确要求「再次点击关闭显示且不在后台继续监听」，
-  /// 所以这里要把原生监听与轮询定时器都停掉，
-  /// 而不是只把 UI 藏起来。
-  Future<void> closeMetricsPanel() async {
-    if (!metricsPanelVisible.value) {
-      return;
-    }
-    metricsPanelVisible.value = false;
-    playbackMetrics.value = null;
-    _metricsPollTimer?.cancel();
-    _metricsPollTimer = null;
-    // 原生侧置 false 后，字节统计与帧计数回调全部短路，
-    // 等于采样彻底停下，不只是不显示。
-    await nativePlayer.setMetricsListening(false);
-  }
-
-  /// 切换播放参数面板
-  ///
-  /// 内部整体包了 try/catch：调用方是 IconButton.onPressed，
-  /// 它不会 await 返回的 Future，一旦抛异常会变成未捕获错误
-  /// （Flutter 只在控制台打一行红字，用户看到的就是「点了没反应」）。
-  void toggleMetricsPanel() {
-    () async {
-      try {
-        if (metricsPanelVisible.value) {
-          await closeMetricsPanel();
-        } else {
-          await openMetricsPanel();
-        }
-      } catch (e) {
-        Log.logPrint(e);
-        Log.d("切换播放信息面板失败：$e");
-        // 兜底：可能已经开启了原生采集但中途失败，
-        // 必须显式关掉，否则会在后台一直采样。
-        await nativePlayer.setMetricsListening(false);
-        metricsPanelVisible.value = false;
-        playbackMetrics.value = null;
-      }
-    }();
-  }
+  // 全屏播放参数面板与采样生命周期由原生页面管理。
 
   /// Flutter 外部纹理 id，-1 表示尚未创建
   ///
@@ -350,8 +257,6 @@ mixin PlayerStateMixin on PlayerMixin {
   /// 是否正在缓冲
   RxBool buffering = false.obs;
 
-  Widget? danmakuView;
-
   /// 隐藏控制器
   void hideControls() {
     showControlsState.value = false;
@@ -409,262 +314,171 @@ mixin PlayerStateMixin on PlayerMixin {
 }
 
 mixin PlayerDanmakuMixin on PlayerStateMixin {
-  /// 弹幕控制器
-  DanmakuController? danmakuController;
-
-  void initDanmakuController(DanmakuController e) {
-    danmakuController = e;
-  }
-
-  void updateDanmuOption(DanmakuOption? option) {
-    if (danmakuController == null || option == null) return;
-    danmakuController!.updateOption(option);
-  }
-
-  void disposeDanmakuController() {
-    danmakuController?.clear();
-  }
-
-  void addDanmaku(List<DanmakuContentItem> items) {
-    if (!showDanmakuState.value) {
+  void addDanmaku(List<FloatingDanmakuItem> items) {
+    if (!fullScreenState.value || !showDanmakuState.value || items.isEmpty) {
       return;
     }
-    for (var item in items) {
-      danmakuController?.addDanmaku(item);
-    }
+    unawaited(nativePlayer.addFullscreenDanmaku(items).catchError((e) {
+      Log.logPrint(e);
+    }));
   }
 }
 
 mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   bool _systemDisposed = false;
   bool _fullScreenLandscape = true;
-  bool _windowLandscape = false;
-  bool _systemFullScreen = false;
-
   bool get fullScreenLandscape => _fullScreenLandscape;
-  Completer<void>? _orientationReady;
+  bool get isLandscapeVideo => videoAspectRatio.value > 1;
+  Worker? _nativeSettingsWorker;
+  Future<void>? _inlineReady;
 
-  void onWindowLandscapeChanged(bool landscape) {
-    _windowLandscape = landscape;
-    final ready = _orientationReady;
-    if (ready != null &&
-        !ready.isCompleted &&
-        landscape == (fullScreenState.value && _fullScreenLandscape)) {
-      ready.complete();
-    }
-    _syncWindowFullScreen();
+  Map<String, dynamic> get nativeFullscreenData {
+    final s = AppSettingsController.instance;
+    return {
+      'title': '直播间',
+      'landscape': _fullScreenLandscape,
+      'danmakuEnabled': showDanmakuState.value,
+      'scaleMode': s.scaleMode.value,
+      'fontSize': s.danmuSize.value,
+      'fontWeight': s.danmuFontWeight.value,
+      'opacity': s.danmuOpacity.value,
+      'area': s.danmuArea.value,
+      'duration': s.danmuSpeed.value,
+      'topMargin': s.danmuTopMargin.value,
+      'bottomMargin': s.danmuBottomMargin.value,
+    };
   }
 
-  void _syncWindowFullScreen() {
-    if (_systemDisposed || fullScreenTransitioning.value) return;
-    if (_windowLandscape && !fullScreenState.value) {
-      unawaited(_enterSystemFullScreen());
-    } else if (!_windowLandscape &&
-        _systemFullScreen &&
-        fullScreenState.value) {
-      exitFull();
+  void syncNativeFullscreen() {
+    if (_systemDisposed || !fullScreenState.value) {
+      return;
     }
-  }
-
-  Future<void> _enterSystemFullScreen() async {
-    FocusManager.instance.primaryFocus?.unfocus();
-    _systemFullScreen = true;
-    _fullScreenLandscape = true;
-    fullScreenTransitioning.value = true;
-    fullScreenState.value = true;
-    try {
-      // 系统已经横屏，只接管显示，不锁方向，转回竖屏仍由系统决定。
-      await WidgetsBinding.instance.endOfFrame;
-      if (_systemDisposed) return;
-      await nativePlayer.setSystemBarsHidden(true);
-    } catch (e) {
+    unawaited(nativePlayer
+        .updateFullscreenPlayer(nativeFullscreenData)
+        .catchError((e) {
       Log.logPrint(e);
-    } finally {
-      if (!_systemDisposed) {
-        fullScreenTransitioning.value = false;
-        _syncWindowFullScreen();
-      }
+    }));
+  }
+
+  void onNativeFullscreenAction(String action, num? value) {
+    if (_systemDisposed ||
+        !fullScreenState.value ||
+        fullScreenTransitioning.value) {
+      return;
+    }
+    if (action == 'exit') {
+      exitFull();
+      return;
+    }
+    final s = AppSettingsController.instance;
+    switch (action) {
+      case 'danmaku':
+        showDanmakuState.value = value == 1;
+        break;
+      case 'scale':
+        if (value != null) s.setScaleMode(value.toInt());
+        break;
+      case 'fontSize':
+        if (value != null) s.setDanmuSize(value.toDouble());
+        break;
+      case 'area':
+        if (value != null) s.setDanmuArea(value.toDouble());
+        break;
+      case 'opacity':
+        if (value != null) s.setDanmuOpacity(value.toDouble());
+        break;
+      case 'duration':
+        if (value != null) s.setDanmuSpeed(value.toDouble());
+        break;
     }
   }
 
-  /// 初始化一些系统状态
   void initSystem() async {
     VolumeController.instance.showSystemUI = false;
-
-    // 进入页面时先把控件显示出来，让用户知道这里可以操作，
-    // 5 秒后按常规逻辑自动隐藏。
     showControlsState.value = true;
     resetHideControlsTimer();
-
-    if (AppSettingsController.instance.autoFullScreen.value) {
-      enterFullScreen();
-    }
-  }
-
-  Future<void> _restoreSystemBars() async {
+    nativePlayer.onFullscreenAction = onNativeFullscreenAction;
+    final s = AppSettingsController.instance;
+    _nativeSettingsWorker = everAll([
+      showDanmakuState,
+      s.scaleMode,
+      s.danmuSize,
+      s.danmuFontWeight,
+      s.danmuOpacity,
+      s.danmuArea,
+      s.danmuSpeed,
+      s.danmuTopMargin,
+      s.danmuBottomMargin,
+      s.playershowSuperChat,
+    ], (_) => syncNativeFullscreen());
+    // 竖屏业务页不再跟随窗口旋转；方向只在完整原生全屏页可见时切换。
+    _inlineReady = nativePlayer.setInlinePlayer(true);
     try {
-      await nativePlayer.setSystemBarsHidden(false);
+      await _inlineReady;
+      if (!_systemDisposed && s.autoFullScreen.value) await enterFullScreen();
     } catch (e) {
-      // Activity/引擎已销毁时仍须释放方向、保亮和播放器状态。
       Log.logPrint(e);
     }
   }
 
-  /// 释放一些系统状态
   Future resetSystem() async {
     _systemDisposed = true;
-    final ready = _orientationReady;
-    if (ready != null && !ready.isCompleted) ready.complete();
+    _nativeSettingsWorker?.dispose();
+    nativePlayer.onFullscreenAction = null;
     fullScreenTransitioning.value = false;
-    await _restoreSystemBars();
-
-    await setAutoOrientation();
+    try {
+      await nativePlayer.setInlinePlayer(false);
+    } catch (e) {
+      Log.logPrint(e);
+    }
     try {
       await ScreenBrightness.instance.resetApplicationScreenBrightness();
     } catch (e) {
       Log.logPrint(e);
     }
-
     await WakelockPlus.disable();
   }
 
-  /// 按真实视频比例进入全屏，切屏期间阻止重复操作。
   Future<void> enterFullScreen() async {
     if (_systemDisposed ||
         fullScreenState.value ||
         fullScreenTransitioning.value) {
       return;
     }
-    if (_windowLandscape) {
-      await _enterSystemFullScreen();
-      return;
-    }
     FocusManager.instance.primaryFocus?.unfocus();
     fullScreenTransitioning.value = true;
     try {
+      await _inlineReady;
       await _syncVideoSize();
       if (_systemDisposed) return;
       _fullScreenLandscape = isLandscapeVideo;
-      _systemFullScreen = false;
       fullScreenState.value = true;
-      // 先提交页面状态；系统栏仅改变可见性，不在旋转前额外改变窗口布局。
-      await WidgetsBinding.instance.endOfFrame;
-      if (_systemDisposed) return;
-      await nativePlayer.setSystemBarsHidden(true);
-      if (_systemDisposed) return;
-      if (_fullScreenLandscape) {
-        await setLandscapeOrientation();
-      } else {
-        await setPortraitOrientation();
-      }
-      final reached = await _waitForScreenOrientation(_fullScreenLandscape);
-      if (!_systemDisposed && !reached) {
-        // 请求被拒绝时撤销全屏，不缓存猜测出来的方向或中间尺寸。
-        fullScreenState.value = false;
-        await setAutoOrientation();
-        if (_systemDisposed) return;
-        await _restoreSystemBars();
-        Log.w("系统未响应全屏方向请求，已恢复普通布局");
-      }
+      await nativePlayer.showFullscreenPlayer(nativeFullscreenData);
     } catch (e) {
       Log.logPrint(e);
-      if (!_systemDisposed) {
-        fullScreenState.value = false;
-        await setAutoOrientation();
-        if (!_systemDisposed) await _restoreSystemBars();
-      }
+      if (!_systemDisposed) fullScreenState.value = false;
     } finally {
-      if (!_systemDisposed) {
-        fullScreenTransitioning.value = false;
-        _syncWindowFullScreen();
-      }
+      if (!_systemDisposed) fullScreenTransitioning.value = false;
     }
   }
 
-  Future<bool> _waitForScreenOrientation(bool landscape) async {
-    if (_systemDisposed) return false;
-    if (_windowLandscape == landscape) return true;
-    final ready = Completer<void>();
-    _orientationReady = ready;
-    try {
-      // 完成信号来自本帧页面布局，不轮询物理尺寸，也不猜测系统动画时长。
-      await ready.future.timeout(const Duration(seconds: 2));
-      return !_systemDisposed && _windowLandscape == landscape;
-    } on TimeoutException {
-      return false;
-    } finally {
-      if (identical(_orientationReady, ready)) _orientationReady = null;
-    }
-  }
-
-  /// 当前画面是否是横屏内容（宽 > 高）
-  ///
-  /// 不用 isVertical 字段：那个值在「复用播放器」时可能停留在构造初值，
-  /// 而 videoAspectRatio 来自原生 onVideoSizeChanged 的真实分辨率。
-  bool get isLandscapeVideo => videoAspectRatio.value > 1.0;
-
-  /// 退出全屏
-  void exitFull() {
+  Future<void> exitFull() async {
     if (_systemDisposed ||
         !fullScreenState.value ||
         fullScreenTransitioning.value) {
       return;
     }
     fullScreenTransitioning.value = true;
-    // 退出全屏时参数面板不可见，必须顺手停掉采集，
-    // 否则它会以「已打开」的状态继续在后台轮询。
-    closeMetricsPanel();
-    final restoreWindow = !_systemFullScreen || _windowLandscape;
-    _systemFullScreen = false;
+    // 恢复后的 Flutter 首帧必须已经是竖屏内联布局，而不是旧全屏状态。
     fullScreenState.value = false;
-    unawaited(_restoreInlineWindow(restoreWindow));
-  }
-
-  Future<void> _restoreInlineWindow(bool restoreWindow) async {
     try {
-      await WidgetsBinding.instance.endOfFrame;
-      if (_systemDisposed) return;
-      if (restoreWindow) {
-        // 原生先固定回竖屏，页面已完成竖屏布局后再释放方向策略。
-        await nativePlayer.setScreenOrientation("restore");
-        if (_systemDisposed) return;
-        if (!await _waitForScreenOrientation(false)) {
-          Log.w("系统未响应退出方向请求，按实际窗口布局并释放切屏锁");
-        }
-      }
-      if (_systemDisposed) return;
-      await setAutoOrientation();
-      if (_systemDisposed) return;
-      await _restoreSystemBars();
+      await nativePlayer.hideFullscreenPlayer();
     } catch (e) {
       Log.logPrint(e);
+      if (!_systemDisposed) fullScreenState.value = true;
     } finally {
-      if (!_systemDisposed) {
-        fullScreenTransitioning.value = false;
-        _syncWindowFullScreen();
-      }
+      if (!_systemDisposed) fullScreenTransitioning.value = false;
     }
-  }
-
-  /// 原生明确指定横屏方向，只在真实横向姿态稳定后切换左右横屏。
-  Future setLandscapeOrientation() async {
-    await nativePlayer.setScreenOrientation("landscape");
-  }
-
-  /// 全屏看竖屏内容：锁死竖屏
-  ///
-  /// 用 `PORTRAIT`，转手机也不动。需求明确「竖屏不处理」，
-  /// 所以这里不跟随传感器。
-  Future setPortraitOrientation() async {
-    await nativePlayer.setScreenOrientation("portrait");
-  }
-
-  /// 恢复进入全屏前的方向策略
-  ///
-  /// 非全屏页面、退出播放器时都调这个，由原生侧恢复保存的策略。
-  /// 原生侧先恢复竖屏播放页，再释放全屏方向限制。
-  Future setAutoOrientation() async {
-    await nativePlayer.setScreenOrientation("auto");
   }
 
   /// 保存截图
@@ -1075,11 +889,7 @@ class PlayerController extends BaseController
           // 小窗状态恢复由 FloatingSession 全局处理，页面无需响应
           break;
         case NativePlayerEventType.metrics:
-          // 面板没开时直接丢弃：原生侧已经短路不再采样，
-          // 这里再判一次是防御「关闭瞬间仍在管道里的那一两条事件」。
-          if (metricsPanelVisible.value && event.metrics != null) {
-            playbackMetrics.value = event.metrics;
-          }
+          // 原生全屏面板直接读取指标，Flutter 不再保留第二套面板状态。
           break;
       }
     });
@@ -1094,14 +904,6 @@ class PlayerController extends BaseController
   void disposeStream() {
     _playerEventSubscription?.cancel();
     _playerEventSubscription = null;
-    // 页面销毁时必须停掉播放参数采集，否则原生端口还会继续回调，
-    // 相当于在后台白白采集。
-    _metricsPollTimer?.cancel();
-    _metricsPollTimer = null;
-    if (metricsPanelVisible.value) {
-      metricsPanelVisible.value = false;
-      nativePlayer.setMetricsListening(false);
-    }
     stopHealthCheck();
   }
 
@@ -1228,7 +1030,6 @@ class PlayerController extends BaseController
     onVerticalDragCancel();
     Log.w("播放器关闭");
     disposeStream();
-    disposeDanmakuController();
     await resetSystem();
     // 关键：只有「没移交的小窗」才释放播放器。
     // 之前这里是无条件 release，导致返回进入小窗后几秒内被销毁。
