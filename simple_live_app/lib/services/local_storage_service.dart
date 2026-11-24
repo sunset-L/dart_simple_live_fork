@@ -50,12 +50,6 @@ class LocalStorageService extends GetxService {
   /// 弹幕字重
   static const String kDanmuFontWeight = "DanmuFontWeight";
 
-  /// 屏蔽福袋 / 抽奖类弹幕
-  ///
-  /// 不分播放器与小窗：这是一条内容规则，两边共用
-  /// （见 [DanmakuShielder]），所以只有一份开关。
-  static const String kDanmuShieldFortuneBag = "DanmuShieldFortuneBag";
-
   /// 小窗启用、圆角（dp）和越界贴边收起。
   static const String kFloatingWindowEnable = "FloatingWindowEnable";
   static const String kFloatingWindowCornerRadius =

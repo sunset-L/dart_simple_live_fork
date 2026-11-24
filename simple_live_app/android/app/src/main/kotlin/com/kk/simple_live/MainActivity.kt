@@ -4,16 +4,16 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.kk.simple_live.player.NativePlayerManager
-import com.kk.simple_live.player.NativeFullscreenHost
+import com.kk.simple_live.player.NativePlayerHost
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
 
-    // 竖屏业务页保留默认 SurfaceView；全屏旋转由完整原生页面接管。
+    // 整个播放路由由原生页面接管，离房后才恢复 Flutter。
     private var playerSystemBarsHidden = false
-    private var fullscreenHost: NativeFullscreenHost? = null
+    private var playerHost: NativePlayerHost? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -26,40 +26,57 @@ class MainActivity : FlutterActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             "simple_live/activity"
         )
-        fun host(): NativeFullscreenHost = fullscreenHost ?: NativeFullscreenHost(
+        fun host(): NativePlayerHost = playerHost ?: NativePlayerHost(
             this, flutterEngine.renderer,
             onBars = { hidden -> playerSystemBarsHidden = hidden; applyPlayerSystemBars() },
             onAction = { action, value ->
-                channel.invokeMethod("playerFullscreenAction", mapOf("action" to action, "value" to value))
+                channel.invokeMethod("playerPageAction", mapOf("action" to action, "value" to value))
             },
-        ).also { fullscreenHost = it }
+        ).also { playerHost = it }
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "attachPlayer" -> {
                     NativePlayerManager.instance.attach(this, flutterEngine)
                     result.success(true)
                 }
-                "setPlayerInline" -> {
-                    val active = call.arguments as? Boolean
-                    if (active == null) result.error("INVALID_ARGUMENT", "页内状态必须为布尔值", null)
-                    else { host().setInline(active); result.success(null) }
+                "closePlayerPage" -> {
+                    host().close(result)
                 }
-                "showPlayerFullscreen" -> {
+                "openPlayerPage" -> {
                     val data = call.arguments as? Map<*, *>
                     if (data == null) result.error("INVALID_ARGUMENT", "全屏页面参数无效", null)
-                    else host().show(data, result)
+                    else host().open(data, result)
                 }
-                "hidePlayerFullscreen" -> host().hide(result)
-                "updatePlayerFullscreen" -> {
-                    (call.arguments as? Map<*, *>)?.let { fullscreenHost?.update(it) }
+                "setPlayerFullscreen" -> {
+                    val data = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
+                    host().setFullscreen(data["fullscreen"] == true, data["landscape"] == true, result)
+                }
+                "showPlayerDialog" -> {
+                    val data = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
+                    host().showDialog(data["kind"]?.toString() ?: "", data, result)
+                }
+                "replacePlayerMessages" -> {
+                    (call.arguments as? List<*>)?.let { playerHost?.replaceMessages(it) }
+                    result.success(null)
+                }
+                "addPlayerMessages" -> {
+                    (call.arguments as? List<*>)?.let { playerHost?.addMessages(it) }
+                    result.success(null)
+                }
+                "playerToast" -> {
+                    android.widget.Toast.makeText(this, call.arguments?.toString() ?: "", android.widget.Toast.LENGTH_SHORT).show()
+                    result.success(null)
+                }
+                "updatePlayerPage" -> {
+                    (call.arguments as? Map<*, *>)?.let { playerHost?.update(it) }
                     result.success(null)
                 }
                 "clearPlayerFullscreenDanmaku" -> {
-                    fullscreenHost?.clearDanmaku()
+                    playerHost?.clearDanmaku()
                     result.success(null)
                 }
                 "addPlayerFullscreenDanmaku" -> {
-                    (call.arguments as? List<*>)?.let { fullscreenHost?.addDanmaku(it) }
+                    (call.arguments as? List<*>)?.let { playerHost?.addDanmaku(it) }
                     result.success(null)
                 }
                 else -> result.notImplemented()
@@ -91,8 +108,8 @@ class MainActivity : FlutterActivity() {
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         // 只解绑 Activity 引用，不释放播放器：
         // 悬浮窗播放时 Activity 可能重建，播放器必须继续存活。
-        fullscreenHost?.dispose()
-        fullscreenHost = null
+        playerHost?.dispose()
+        playerHost = null
         NativePlayerManager.instance.detachActivity()
         // 但同时必须把「绑定在这个引擎上」的 Channel / EventSink / 纹理全部清掉。
         // 引擎已经销毁，继续持有那个 sink 会在用户点小窗时往死引擎发消息，

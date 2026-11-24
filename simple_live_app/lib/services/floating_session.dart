@@ -484,7 +484,7 @@ class FloatingSession {
     if (!AppSettingsController.instance.floatingDanmuEnable.value) {
       return;
     }
-    // 屏蔽规则与播放器弹幕共用一份实现（关键词 + 福袋），
+    // 屏蔽规则与播放器弹幕共用用户关键词/正则过滤实现，
     // 否则小窗里会冒出播放器里已经被屏蔽的内容
     if (DanmakuShielder.shouldBlock(msg)) {
       return;
@@ -909,9 +909,6 @@ class FloatingSession {
       Log.logPrint(e);
     });
     NativePlayerBridge.instance.release().catchError((e) {
-      Log.logPrint(e);
-    });
-    NativePlayerBridge.instance.releaseTexture().catchError((e) {
       Log.logPrint(e);
     });
     // 若此刻正停在直播页，一并退出该页

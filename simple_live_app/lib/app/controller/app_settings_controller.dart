@@ -117,9 +117,6 @@ class AppSettingsController extends GetxController {
     // ignore: invalid_use_of_protected_member
     shieldList.value = LocalStorageService.instance.shieldBox.values.toSet();
 
-    danmuShieldFortuneBag.value = LocalStorageService.instance
-        .getValue(LocalStorageService.kDanmuShieldFortuneBag, false);
-
     scaleMode.value = LocalStorageService.instance.getValue(
       LocalStorageService.kPlayerScaleMode,
       0,
@@ -502,17 +499,6 @@ class AppSettingsController extends GetxController {
   void addShieldList(String e) {
     shieldList.add(e);
     LocalStorageService.instance.shieldBox.put(e, e);
-  }
-
-  /// 屏蔽福袋 / 抽奖类弹幕
-  ///
-  /// 播放器与小窗共用同一个开关：规则只有一份实现（DanmakuShielder），
-  /// 两边的过滤都走它，不需要各自配置。
-  var danmuShieldFortuneBag = false.obs;
-  void setDanmuShieldFortuneBag(bool e) {
-    danmuShieldFortuneBag.value = e;
-    LocalStorageService.instance
-        .setValue(LocalStorageService.kDanmuShieldFortuneBag, e);
   }
 
   void removeShieldList(String e) {

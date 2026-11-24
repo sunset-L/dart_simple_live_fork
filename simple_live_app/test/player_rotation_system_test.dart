@@ -1,10 +1,7 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:get/get.dart';
-import 'package:simple_live_app/modules/live_room/live_room_layout.dart';
 import 'package:simple_live_app/modules/live_room/player/player_controller.dart';
 import 'package:simple_live_app/services/native_player_bridge.dart';
 
@@ -14,30 +11,11 @@ const _player = MethodChannel('simple_live/native_player');
 class _SystemProbe
     with PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin, PlayerSystemMixin {
   @override
-  Map<String, dynamic> get nativeFullscreenData => {
+  Map<String, dynamic> get nativePageData => {
         'title': '测试直播间',
         'landscape': fullScreenLandscape,
         'danmakuEnabled': showDanmakuState.value,
       };
-}
-
-Widget _room(_SystemProbe controller) => MaterialApp(
-      home: Obx(() => Scaffold(
-            body: LiveRoomLayout(
-              fullScreen: controller.fullScreenState.value,
-              landscapeFullScreen: controller.fullScreenLandscape,
-              appBar: AppBar(title: const Text('直播间')),
-              player: const ColoredBox(color: Colors.black),
-              sidebar: const SizedBox.expand(),
-              portraitActions: const SizedBox(height: 48),
-            ),
-          )),
-    );
-
-Future<void> _flush(WidgetTester tester) async {
-  for (var i = 0; i < 4; i++) {
-    await tester.pump();
-  }
 }
 
 void main() {
@@ -45,165 +23,118 @@ void main() {
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   late List<MethodCall> calls;
-  late List<MethodCall> orientation;
-  late List<MethodCall> systemUi;
-  Completer<void>? showReady;
-  Completer<void>? hideReady;
-  bool failShow = false;
-  bool failHide = false;
+  Completer<void>? ready;
+  bool fail = false;
   bool vertical = false;
 
   setUp(() {
     calls = [];
-    orientation = [];
-    systemUi = [];
-    showReady = hideReady = null;
-    failShow = failHide = vertical = false;
+    ready = null;
+    fail = false;
+    vertical = false;
     messenger.setMockMethodCallHandler(_activity, (call) async {
       calls.add(call);
-      if (call.method == 'showPlayerFullscreen') {
-        if (failShow) throw PlatformException(code: 'PLAYER_UNAVAILABLE');
-        await showReady?.future;
-      }
-      if (call.method == 'hidePlayerFullscreen') {
-        if (failHide) throw PlatformException(code: 'FULLSCREEN_TIMEOUT');
-        await hideReady?.future;
+      if (call.method == 'setPlayerFullscreen') {
+        if (fail) throw PlatformException(code: 'PLAYER_UNAVAILABLE');
+        await ready?.future;
       }
       return null;
     });
     messenger.setMockMethodCallHandler(_player, (call) async {
-      if (call.method == 'setScreenOrientation') orientation.add(call);
       if (call.method == 'getVideoSize') {
         return vertical
             ? {'width': 1080, 'height': 1920, 'aspectRatio': 9 / 16}
             : {'width': 1920, 'height': 1080, 'aspectRatio': 16 / 9};
       }
-      return null;
-    });
-    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
-      if (call.method.startsWith('SystemChrome.setEnabledSystemUI')) {
-        systemUi.add(call);
-      }
+      calls.add(call);
       return null;
     });
   });
-
   tearDown(() {
-    NativePlayerBridge.instance.onFullscreenAction = null;
+    NativePlayerBridge.instance.onPageAction = null;
     messenger.setMockMethodCallHandler(_activity, null);
     messenger.setMockMethodCallHandler(_player, null);
-    messenger.setMockMethodCallHandler(SystemChannels.platform, null);
   });
 
-  testWidgets('连续全屏交接只打开关闭原生页，Flutter不再请求旋转或切换系统栏', (tester) async {
+  test('反复切屏仅请求原生页改变模式，不创建Flutter纹理或重复打开关闭页面', () async {
     final controller = _SystemProbe();
-    await tester.pumpWidget(_room(controller));
-    final size = tester.view.physicalSize;
     for (var i = 0; i < 20; i++) {
       await controller.enterFullScreen();
-      await _flush(tester);
       expect(controller.fullScreenState.value, isTrue);
-      expect((calls.last.arguments as Map)['landscape'], isTrue);
       await controller.exitFull();
-      await _flush(tester);
       expect(controller.fullScreenState.value, isFalse);
-      expect(controller.fullScreenTransitioning.value, isFalse);
-      expect(tester.view.physicalSize, size);
     }
-    expect(calls.map((e) => e.method), [
-      for (var i = 0; i < 20; i++) ...[
-        'showPlayerFullscreen',
-        'hidePlayerFullscreen'
-      ]
-    ]);
-    expect(orientation, isEmpty);
-    expect(systemUi, isEmpty);
-    expect(tester.takeException(), isNull);
+    expect(calls.map((e) => e.method), everyElement('setPlayerFullscreen'));
+    expect(calls.length, 40);
+    expect(calls.first.arguments, {'fullscreen': true, 'landscape': true});
+    expect(calls.last.arguments, {'fullscreen': false, 'landscape': false});
   });
 
-  testWidgets('等待原生交接期间重复点击不会创建第二页或交叉退出', (tester) async {
+  test('连续点击不会重入切屏请求', () async {
     final controller = _SystemProbe();
-    await tester.pumpWidget(_room(controller));
-    showReady = Completer<void>();
-    final entering = controller.enterFullScreen();
-    await _flush(tester);
+    ready = Completer<void>();
+    final first = controller.enterFullScreen();
+    await Future<void>.delayed(Duration.zero);
     await controller.enterFullScreen();
-    await controller.exitFull();
     expect(calls.length, 1);
-    expect(controller.fullScreenTransitioning.value, isTrue);
-    showReady!.complete();
-    await entering;
-    hideReady = Completer<void>();
-    final exiting = controller.exitFull();
-    await _flush(tester);
-    await controller.enterFullScreen();
-    await controller.exitFull();
-    expect(calls.length, 2);
-    // 新Surface的首帧必须是内联布局，状态提前恢复，但锁要等原生完成才释放。
-    expect(controller.fullScreenState.value, isFalse);
-    expect(controller.fullScreenTransitioning.value, isTrue);
-    hideReady!.complete();
-    await exiting;
+    ready!.complete();
+    await first;
     expect(controller.fullScreenTransitioning.value, isFalse);
   });
 
-  testWidgets('原生页未就绪时恢复状态，不退回有问题的Flutter旋转路径', (tester) async {
+  test('原生切屏失败释放操作锁并恢复原状态', () async {
     final controller = _SystemProbe();
-    await tester.pumpWidget(_room(controller));
-    failShow = true;
+    fail = true;
     await controller.enterFullScreen();
-    await _flush(tester);
     expect(controller.fullScreenState.value, isFalse);
     expect(controller.fullScreenTransitioning.value, isFalse);
-    expect(orientation, isEmpty);
-    expect(systemUi, isEmpty);
-    failShow = false;
+    fail = false;
     await controller.enterFullScreen();
-    expect(controller.fullScreenState.value, isTrue);
-  });
-
-  testWidgets('退出失败保留原生全屏状态，允许再次退出', (tester) async {
-    final controller = _SystemProbe();
-    await tester.pumpWidget(_room(controller));
-    await controller.enterFullScreen();
-    failHide = true;
+    fail = true;
     await controller.exitFull();
     expect(controller.fullScreenState.value, isTrue);
     expect(controller.fullScreenTransitioning.value, isFalse);
-    failHide = false;
-    await controller.exitFull();
-    expect(controller.fullScreenState.value, isFalse);
-    expect(orientation, isEmpty);
   });
 
-  testWidgets('竖屏视频传给原生竖屏全屏页，不要求Flutter窗口改尺寸', (tester) async {
-    final controller = _SystemProbe();
-    await tester.pumpWidget(_room(controller));
+  test('竖屏视频的全屏模式不请求横屏', () async {
     vertical = true;
+    final controller = _SystemProbe();
     await controller.enterFullScreen();
-    expect((calls.last.arguments as Map)['landscape'], isFalse);
-    await controller.exitFull();
-    expect(orientation, isEmpty);
+    expect(calls.last.arguments, {'fullscreen': true, 'landscape': false});
   });
 
-  testWidgets('弹幕仅发送到已开启的原生全屏页，半屏不积攒渲染数据', (tester) async {
-    final controller = _SystemProbe();
-    await tester.pumpWidget(_room(controller));
-    const items = [FloatingDanmakuItem(text: '弹幕', color: 0xffffffff)];
-    controller.showDanmakuState.value = true;
-    controller.addDanmaku(items);
-    expect(calls, isEmpty);
-    await controller.enterFullScreen();
-    controller.addDanmaku(items);
-    await _flush(tester);
-    expect(calls.last.method, 'addPlayerFullscreenDanmaku');
-    expect(calls.last.arguments, [
-      {'text': '弹幕', 'color': 0xffffffff}
+  test('聊天与设置走原生页面桥接，不打开Flutter弹窗', () async {
+    final bridge = NativePlayerBridge.instance;
+    await bridge.openPlayerPage({'title': '测试直播间'});
+    await bridge.addPlayerMessages([
+      {'userName': '观众', 'message': '你好'}
     ]);
-    controller.showDanmakuState.value = false;
-    controller.addDanmaku(items);
-    await _flush(tester);
+    await bridge.showPlayerDialog('shield', {
+      'keywords': ['/测试/']
+    });
+    await bridge.closePlayerPage();
+    expect(calls.map((e) => e.method), [
+      'openPlayerPage',
+      'addPlayerMessages',
+      'showPlayerDialog',
+      'closePlayerPage'
+    ]);
+  });
+
+  test('竖屏和全屏共用原生弹幕，关闭开关时不发送', () async {
+    final controller = _SystemProbe();
+    const item = FloatingDanmakuItem(text: '测试', color: 0xffffffff);
+    controller.addDanmaku([item]);
+    await Future<void>.delayed(Duration.zero);
+    expect(calls, isEmpty);
+    controller.showDanmakuState.value = true;
+    controller.addDanmaku([item]);
+    await Future<void>.delayed(Duration.zero);
+    controller.fullScreenState.value = true;
+    controller.addDanmaku([item]);
+    await Future<void>.delayed(Duration.zero);
     expect(
-        calls.where((e) => e.method == 'addPlayerFullscreenDanmaku').length, 1);
+        calls.map((e) => e.method), everyElement('addPlayerFullscreenDanmaku'));
+    expect(calls.length, 2);
   });
 }

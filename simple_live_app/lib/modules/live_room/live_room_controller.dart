@@ -3,11 +3,9 @@ import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:simple_live_app/app/app_style.dart';
 import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/event_bus.dart';
@@ -18,17 +16,14 @@ import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/modules/live_room/live_room_error.dart';
 import 'package:simple_live_app/modules/live_room/player/player_controller.dart';
-import 'package:simple_live_app/modules/live_room/player/player_controls.dart'
-    show showFollowUser;
 import 'package:simple_live_app/services/native_player_bridge.dart';
-import 'package:simple_live_app/modules/settings/danmu_settings_page.dart';
 import 'package:simple_live_app/services/db_service.dart';
+import 'package:simple_live_app/services/local_storage_service.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/danmaku_shielder.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
 import 'package:simple_live_app/services/floating_session.dart';
-import 'package:simple_live_app/modules/live_room/auto_exit_dialog.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -84,7 +79,6 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   RxList<LiveSuperChatMessage> superChats = RxList<LiveSuperChatMessage>();
 
   /// 滚动控制
-  final ScrollController scrollController = ScrollController();
 
   /// 聊天信息
   RxList<LiveMessage> messages = RxList<LiveMessage>();
@@ -129,10 +123,6 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 是否启用自动关闭
   var autoExitEnable = false.obs;
 
-  /// 是否禁用自动滚动聊天栏
-  /// - 当用户向上滚动聊天栏时，不再自动滚动
-  var disableAutoScroll = false.obs;
-
   /// 是否处于后台
   var isBackground = false;
 
@@ -154,9 +144,27 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   Worker? _nativeRoomWorker;
 
   @override
-  Map<String, dynamic> get nativeFullscreenData => {
-        ...super.nativeFullscreenData,
+  Map<String, dynamic> get nativePageData => {
+        ...super.nativePageData,
         'title': detail.value?.title ?? '直播间',
+        'roomKey': '${site.id}_$roomId',
+        'dark': Get.isDarkMode,
+        'roomListLocked': LocalStorageService.instance
+            .getValue(LocalStorageService.kPlayerRoomListLocked, true),
+        'accent': AppSettingsController.instance.styleColor.value,
+        'userName': displayUserName,
+        'avatar': detail.value?.userAvatar ?? '',
+        'siteName': site.name,
+        'hasSC': site.id == Constant.kBiliBili,
+        'popularity': Utils.onlineToString(roomPopularity.value),
+        'followed': followed.value,
+        'aspectRatio': videoAspectRatio.value,
+        'chatSize': AppSettingsController.instance.chatTextSize.value,
+        'chatGap': AppSettingsController.instance.chatTextGap.value,
+        'chatBubble': AppSettingsController.instance.chatBubbleStyle.value,
+        'durationText': liveDuration.value,
+        'follows': _nativeFollows,
+        'history': _nativeHistory,
         'qualities': qualites.map((e) => e.quality).toList(),
         'qualityIndex': currentQuality,
         'lineCount': playUrls.length,
@@ -165,11 +173,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         'superChatEnabled':
             AppSettingsController.instance.playershowSuperChat.value,
         'superChats': superChats
+            .where((sc) => sc.endTime.isAfter(DateTime.now()))
             .map((sc) => {
                   'key':
                       '${sc.startTime.millisecondsSinceEpoch}_${sc.userName}_${sc.message}',
                   'text': '${sc.userName} ¥${sc.price}\n${sc.message}',
                   'color': sc.backgroundColor,
+                  'message': sc.message,
+                  'userName': sc.userName,
                   'endTime': sc.endTime.millisecondsSinceEpoch,
                 })
             .toList(),
@@ -182,38 +193,166 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
                     : '',
       };
 
+  List<Map<String, dynamic>> _nativeFollows = [];
+  List<Map<String, dynamic>> _nativeHistory = [];
+  final _pendingNativeMessages = <Map<String, dynamic>>[];
+  Timer? _nativeMessageTimer;
+
+  Map<String, dynamic> _nativeMessage(LiveMessage message) => {
+        'userName': message.userName,
+        'message': message.message,
+      };
+
+  void _queueNativeMessage(LiveMessage message) {
+    if (_disposed || isBackground || fullScreenState.value) return;
+    _pendingNativeMessages.add(_nativeMessage(message));
+    _nativeMessageTimer ??= Timer(const Duration(milliseconds: 50), () {
+      _nativeMessageTimer = null;
+      if (_disposed || fullScreenState.value) {
+        _pendingNativeMessages.clear();
+        return;
+      }
+      final batch = _pendingNativeMessages.toList();
+      _pendingNativeMessages.clear();
+      unawaited(nativePlayer.addPlayerMessages(batch).catchError((e) {
+        Log.logPrint(e);
+      }));
+    });
+  }
+
+  Future<void> _reloadNativeRooms({bool refresh = false}) async {
+    if (refresh) await FollowService.instance.loadData();
+    if (_disposed) return;
+    _nativeFollows = FollowService.instance.followList
+        .map((item) => {
+              'siteId': item.siteId,
+              'roomId': item.roomId,
+              'userName': item.userName,
+              'siteName': Sites.allSites[item.siteId]?.name ?? item.siteId,
+              'status': item.liveStatus.value == 2
+                  ? '直播中'
+                  : item.liveStatus.value == 1
+                      ? '未开播'
+                      : '未知',
+            })
+        .toList();
+    _nativeHistory = DBService.instance
+        .getHistores()
+        .take(20)
+        .map((item) => {
+              'siteId': item.siteId,
+              'roomId': item.roomId,
+              'userName': item.userName,
+              'siteName': Sites.allSites[item.siteId]?.name ?? item.siteId,
+            })
+        .toList();
+    syncNativePage();
+  }
+
   @override
-  void onNativeFullscreenAction(String action, num? value) {
-    if (!fullScreenState.value || fullScreenTransitioning.value) return;
+  Future<void> exitFull() async {
+    await super.exitFull();
+    if (_disposed || fullScreenState.value) return;
+    _pendingNativeMessages.clear();
+    _nativeMessageTimer?.cancel();
+    _nativeMessageTimer = null;
+    await nativePlayer
+        .replacePlayerMessages(messages.map(_nativeMessage).toList());
+  }
+
+  @override
+  void onNativePageAction(String action, dynamic value) {
+    if (_disposed || fullScreenTransitioning.value) return;
+    final settings = AppSettingsController.instance;
     switch (action) {
+      case 'roomListLocked':
+        if (value is bool) {
+          LocalStorageService.instance
+              .setValue(LocalStorageService.kPlayerRoomListLocked, value);
+        }
+        return;
+      case 'back':
+        unawaited(handleBackPressed());
+        return;
       case 'quality':
-        if (value != null) changePlayQuality(value.toInt());
+        if (value is num) changePlayQuality(value.toInt());
         return;
       case 'line':
-        if (value != null) changePlayLine(value.toInt());
+        if (value is num) changePlayLine(value.toInt());
         return;
       case 'refresh':
         refreshRoom();
         return;
+      case 'follow':
+        followUser();
+        return;
+      case 'unfollow':
+        removeFollowUser();
+        return;
+      case 'share':
+        share();
+        return;
+      case 'copyRoom':
+        copyUrl();
+        return;
+      case 'copyError':
+        copyErrorDetail();
+        return;
+      case 'copyStream':
+        copyPlayUrl();
+        return;
+      case 'openApp':
+        openNaviteAPP();
+        return;
+      case 'reloadFollow':
+        unawaited(_reloadNativeRooms(refresh: true));
+        return;
       case 'rooms':
+        unawaited(_reloadNativeRooms()
+            .then((_) => nativePlayer.showPlayerDialog('rooms')));
+        return;
+      case 'openRoom':
+        if (value is Map) {
+          final selectedSite = Sites.allSites[value['siteId']];
+          final selectedRoom = value['roomId'];
+          if (selectedSite != null && selectedRoom is String) {
+            resetRoom(selectedSite, selectedRoom);
+          }
+        }
+        return;
       case 'floating':
-      case 'danmakuSettings':
-        unawaited(_openInlinePlayerAction(action));
+        unawaited(() async {
+          if (await enterFloatingWindow() && !_disposed) Get.back();
+        }());
+        return;
+      case 'shieldSettings':
+        unawaited(showDanmuShield());
+        return;
+      case 'addShield':
+        if (value is String && value.isNotEmpty) {
+          settings.addShieldList(value);
+        }
+        return;
+      case 'autoExitSettings':
+        unawaited(showAutoExitSheet());
+        return;
+      case 'chatSize':
+        if (value is num) settings.setChatTextSize(value.toDouble());
+        break;
+      case 'chatGap':
+        if (value is num) settings.setChatTextGap(value.toDouble());
+        break;
+      case 'chatBubble':
+        if (value is bool) settings.setChatBubbleStyle(value);
+        break;
+      case 'showSC':
+        if (value is bool) settings.setPlayerShowSuperChat(value);
+        break;
+      default:
+        super.onNativePageAction(action, value);
         return;
     }
-    super.onNativeFullscreenAction(action, value);
-  }
-
-  Future<void> _openInlinePlayerAction(String action) async {
-    await exitFull();
-    if (_disposed || fullScreenState.value) return;
-    if (action == 'danmakuSettings') {
-      showDanmuSettingsSheet();
-    } else if (action == 'rooms') {
-      showFollowUser(this);
-    } else if (action == 'floating' && await enterFloatingWindow()) {
-      Get.back();
-    }
+    syncNativePage();
   }
 
   @override
@@ -232,7 +371,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       detailLoaded,
       liveStatus,
       superChats,
-    ], (_) => syncNativeFullscreen());
+      roomPopularity,
+      followed,
+      liveDuration,
+      videoAspectRatio,
+      AppSettingsController.instance.chatTextSize,
+      AppSettingsController.instance.chatTextGap,
+      AppSettingsController.instance.chatBubbleStyle,
+    ], (_) => syncNativePage());
+    unawaited(_reloadNativeRooms());
     initAutoExit();
     showDanmakuState.value = AppSettingsController.instance.danmuEnable.value;
     followed.value = DBService.instance.getFollowExist("${site.id}_$roomId");
@@ -240,8 +387,6 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     // 从悬浮小窗点回来：原生播放器里那条流还在跑，直接接管画面，
     // 不重新取流、不重置播放器，避免黑一下再重新加载。
     _restoreFromFloating();
-
-    scrollController.addListener(scrollListener);
 
     super.onInit();
   }
@@ -265,6 +410,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     // 而原生小窗其实还开着。不同步就会出现
     // 「小窗还在，页面却按普通进入流程重新取流」。
     await FloatingSession.instance.syncFromNative();
+    if (_disposed) return;
 
     // 小窗是否正在播「同一个房间」
     final sameRoom = FloatingSession.instance.hasSession &&
@@ -280,14 +426,16 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       _shouldAdoptStream = await nativePlayer.hasActiveStream();
     }
 
+    if (_disposed) return;
     FloatingSession.instance.restoredFromFloating = false;
 
     if (_shouldAdoptStream) {
-      // 退出小窗：画面输出从悬浮窗 Surface 切回页内纹理，
+      // 退出小窗：画面输出从悬浮窗 Surface 切回原生播放页，
       // 播放器实例、解码器、网络连接全部不动，因此没有黑屏与 loading。
       isFloating.value = false;
       isPlayerHandedOver = false;
       await FloatingSession.instance.detachKeepAlive();
+      if (_disposed) return;
       nativePlayer.exitFloating().catchError((e) {
         Log.logPrint(e);
       });
@@ -298,6 +446,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     // 小窗播的是别人：必须关掉，否则原生侧输出优先级
     // 仍会把画面送进小窗，页面里的播放器拿不到输出。
     await FloatingSession.instance.closeIfPlaying(site: site, roomId: roomId);
+    if (_disposed) return;
     isFloating.value = false;
     isPlayerHandedOver = false;
     // 非小窗进入（普通进入 / 小窗播的是别人）：播放器里可能还留着
@@ -307,25 +456,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     loadData();
   }
 
-  /// 普通进房先停止旧流、复位首帧状态，加载层遮住旧画面但不重建纹理。
+  /// 普通进房停止旧流，原生 PlayerView 清掉旧房间画面。
   Future<void> _resetPlayerForFreshEntry() async {
     try {
       await nativePlayer.stop();
     } catch (e) {
       Log.logPrint(e);
-    }
-    hasRenderedFirstFrame.value = false;
-    try {
-      await nativePlayer.clearTexture();
-    } catch (e) {
-      Log.logPrint(e);
-    }
-  }
-
-  void scrollListener() {
-    if (scrollController.position.userScrollDirection ==
-        ScrollDirection.forward) {
-      disableAutoScroll.value = true;
     }
   }
 
@@ -366,13 +502,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       return;
     }
     _autoExitPromptShowing = true;
-    AutoExitAction? action;
+    dynamic action;
     try {
-      action = await showDialog<AutoExitAction>(
-        context: Get.context!,
-        barrierDismissible: false,
-        builder: (_) => const AutoExitDialog(),
-      );
+      action = await nativePlayer.showPlayerDialog('autoExit');
     } finally {
       _autoExitPromptShowing = false;
     }
@@ -380,16 +512,16 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       return;
     }
     switch (action) {
-      case AutoExitAction.delay:
+      case 'delay':
         delayAutoExit.value = true;
-        showAutoExitSheet();
+        await showAutoExitSheet();
         setAutoExit();
         break;
-      case AutoExitAction.closeLive:
+      case 'closeLive':
         delayAutoExit.value = false;
         await closeLiveRoom();
         break;
-      case AutoExitAction.exitApplication:
+      case 'exitApplication':
         await WakelockPlus.disable();
         exit(0);
       case null:
@@ -460,18 +592,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     loadData();
   }
 
-  /// 聊天栏始终滚动到底部
-  void chatScrollToBottom() {
-    if (!fullScreenState.value && scrollController.hasClients) {
-      // 如果手动上拉过，就不自动滚动到底部
-      if (disableAutoScroll.value) {
-        return;
-      }
-      scrollController.jumpTo(scrollController.position.maxScrollExtent);
-    }
-  }
-
-  /// 初始化弹幕接收事件
+  /// 弹幕业务回调；聊天滚动由原生 ListView 管理。
   void initDanmau() {
     liveDanmaku.onMessage = onWSMessage;
     liveDanmaku.onClose = onWSClose;
@@ -481,24 +602,18 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 接收到WebSocket信息
   void onWSMessage(LiveMessage msg) {
     if (msg.type == LiveMessageType.chat) {
-      if (messages.length > 200 && !disableAutoScroll.value) {
+      if (messages.length >= 200) {
         messages.removeAt(0);
       }
 
-      // 关键词 + 福袋规则统一走 DanmakuShielder，
-      // 与小窗弹幕保持同一套判断（含新加的福袋屏蔽）
+      // 仅保留用户自定义的关键词/正则，与小窗共用一份过滤逻辑。
       if (DanmakuShielder.shouldBlock(msg)) {
         return;
       }
 
       messages.add(msg);
+      _queueNativeMessage(msg);
 
-      // 横屏聊天列表已卸载，不再为每条弹幕安排页面帧和自动滚动。
-      if (!fullScreenState.value) {
-        WidgetsBinding.instance.addPostFrameCallback(
-          (_) => chatScrollToBottom(),
-        );
-      }
       if (!liveStatus.value || isBackground) {
         return;
       }
@@ -517,20 +632,22 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     } else if (msg.type == LiveMessageType.online) {
       online.value = msg.data;
     } else if (msg.type == LiveMessageType.superChat) {
+      removeSuperChats();
       superChats.add(msg.data);
     }
   }
 
   /// 添加一条系统消息
   void addSysMsg(String msg) {
-    messages.add(
-      LiveMessage(
-        type: LiveMessageType.chat,
-        userName: "LiveSysMessage",
-        message: msg,
-        color: LiveMessageColor.white,
-      ),
+    final message = LiveMessage(
+      type: LiveMessageType.chat,
+      userName: "LiveSysMessage",
+      message: msg,
+      color: LiveMessageColor.white,
     );
+    if (messages.length >= 200) messages.removeAt(0);
+    messages.add(message);
+    _queueNativeMessage(message);
   }
 
   /// 接收到WebSocket关闭信息
@@ -619,7 +736,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     } catch (e) {
       if (!_isPlaybackCurrent(generation)) return;
       Log.logPrint(e);
-      //SmartDialog.showToast(e.toString());
+      //_showToast(e.toString());
       // 这里不能写成 e as Error：网络异常/解析异常多为 Exception 或 FormatException，
       // 强转失败会抛出新的 TypeError，掩盖真实错误并让页面白屏。
       error = e;
@@ -649,7 +766,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 接管原生播放器里已经在跑的那条流
   ///
   /// 从小窗回到直播页、或小窗正在播同一主播时使用：
-  /// 画面输出会自动从悬浮窗 Surface 切回页内纹理，
+  /// 画面输出会自动从悬浮窗 Surface 切回原生播放页，
   /// 播放器实例、解码器、网络连接全都不动，因此不会出现重新加载的空白期。
   ///
   /// 关键补充：跳过取流意味着 `qualites` / `currentQuality` / `playUrls`
@@ -663,9 +780,6 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (!_isPlaybackCurrent(generation)) return;
     await _restorePlaybackWakelock();
     if (!_isPlaybackCurrent(generation)) return;
-    // 纹理里上一帧还在，直接标记为「已有画面」，
-    // 否则页面会盖一层 loading 遮罩，用户看到的就是「回到页面还在 loading」。
-    hasRenderedFirstFrame.value = true;
     resetHealthCheck();
     startHealthCheck();
     // 补齐清晰度/线路等元数据（不重新取流）
@@ -813,7 +927,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (target.isEmpty || target == current) {
       return;
     }
-    SmartDialog.showToast(
+    _showToast(
       current.isEmpty
           ? "当前画质未跟随设置，可在清晰度中切换到$target"
           : "当前为$current，可在清晰度中切换到$target",
@@ -1257,15 +1371,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     // 被静默降档时告诉用户「现在是哪一档」，比笼统说「画质受限」有用得多
     final label = site.lastQualityDowngraded ? site.lastDowngradeLabel : "";
     if (label.isNotEmpty) {
-      SmartDialog.showToast(
+      _showToast(
         "斗鱼未登录或票据已失效，当前为$label（登录后可看原画）",
       );
     } else if (site.lastQualityDowngraded) {
-      SmartDialog.showToast(
+      _showToast(
         "斗鱼未登录或票据已失效，画质被降档且地址会定期失效（登录后可看原画）",
       );
     } else {
-      SmartDialog.showToast("斗鱼授权已失效，已用普通方式取流（画质与地址有效期会受限）");
+      _showToast("斗鱼授权已失效，已用普通方式取流（画质与地址有效期会受限）");
     }
   }
 
@@ -1276,7 +1390,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
     // 只在前几次给用户反馈，避免长时间挂着页面时反复弹提示
     if (_refreshFailCount <= 3) {
-      SmartDialog.showToast("直播地址刷新失败，正在重试");
+      _showToast("直播地址刷新失败，正在重试");
     }
 
     // 退避重试：5s、10s、20s……最长 60s，最多再试 6 次
@@ -1436,7 +1550,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         await nativePlayer.switchSource(url, headers: playHeaders);
         _syncFloatingLine();
       } else {
-        await ensureVideoTexture();
+        await ensureVideoOutput();
         if (!isCurrent()) return;
         final alive = preserveFrame && await nativePlayer.hasActiveStream();
         if (!isCurrent()) return;
@@ -1444,7 +1558,6 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         if (alive) {
           await nativePlayer.switchSource(url, headers: playHeaders);
         } else {
-          hasRenderedFirstFrame.value = false;
           await nativePlayer.open(url,
               headers: playHeaders, forceReload: forceReload);
         }
@@ -1628,7 +1741,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       await refreshOverlayPermission();
       if (_closingLiveRoom || _disposed || !floatingEnabled) return false;
       if (!hasOverlayPermission.value) {
-        SmartDialog.showToast("请先授予悬浮窗权限");
+        _showToast("请先授予悬浮窗权限");
         await nativePlayer.requestOverlayPermission();
         return false;
       }
@@ -1681,7 +1794,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
           await _recoverPlayback("小窗播放故障", skipRetry: true);
         };
       } else {
-        SmartDialog.showToast("悬浮窗启动失败");
+        _showToast("悬浮窗启动失败");
       }
       return success;
     } catch (e) {
@@ -1781,6 +1894,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     );
 
     DBService.instance.addOrUpdateHistory(history);
+    unawaited(_reloadNativeRooms());
   }
 
   /// 关注用户
@@ -1805,10 +1919,6 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// 取消关注用户
   void removeFollowUser() async {
-    if (!await Utils.showAlertDialog("确定要取消关注该用户吗？", title: "取消关注")) {
-      return;
-    }
-
     var id = "${site.id}_$roomId";
     DBService.instance.deleteFollow(id);
     followed.value = false;
@@ -1827,7 +1937,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       return;
     }
     Utils.copyToClipboard(detail.value!.url);
-    SmartDialog.showToast("已复制直播间链接");
+    _showToast("已复制直播间链接");
   }
 
   /// 复制新生成的直播流
@@ -1840,331 +1950,55 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       var playUrl = await site.liveSite.getPlayUrls(
           detail: detail.value!, quality: qualites[currentQuality]);
       if (playUrl.urls.isEmpty) {
-        SmartDialog.showToast("无法读取播放地址");
+        _showToast("无法读取播放地址");
         return;
       }
       Utils.copyToClipboard(playUrl.urls.first);
-      SmartDialog.showToast("已复制播放直链");
+      _showToast("已复制播放直链");
     } catch (e) {
       Log.logPrint(e);
-      SmartDialog.showToast("无法读取播放地址");
+      _showToast("无法读取播放地址");
     }
   }
 
-  /// 底部打开播放器设置
-  void showDanmuSettingsSheet() {
-    Utils.showBottomSheet(
-      title: "弹幕设置",
-      child: ListView(
-        padding: AppStyle.edgeInsetsA12,
-        children: [
-          DanmuSettingsView(
-            showFloatingEntry: false,
-            onTapDanmuShield: () {
-              Get.back();
-              showDanmuShield();
-            },
-          ),
-        ],
-      ),
-    );
-  }
+  // 设置弹窗全部由原生页面创建，保存仍沿用现有 Hive/GetX 设置。
+  void showDanmuSettingsSheet() =>
+      unawaited(nativePlayer.showPlayerDialog('settings'));
+  void showPlayerSettingsSheet() => showDanmuSettingsSheet();
+  void showQualitySheet() =>
+      unawaited(nativePlayer.showPlayerDialog('quality'));
+  void showPlayUrlsSheet() => unawaited(nativePlayer.showPlayerDialog('line'));
 
-  void showVolumeSlider(BuildContext targetContext) {
-    SmartDialog.showAttach(
-      targetContext: targetContext,
-      alignment: Alignment.topCenter,
-      displayTime: const Duration(seconds: 3),
-      maskColor: const Color(0x00000000),
-      builder: (context) {
-        return Container(
-          decoration: BoxDecoration(
-            borderRadius: AppStyle.radius12,
-            color: Theme.of(context).cardColor,
-          ),
-          padding: AppStyle.edgeInsetsA4,
-          child: Obx(
-            () => SizedBox(
-              width: 200,
-              child: Slider(
-                min: 0,
-                max: 100,
-                value: AppSettingsController.instance.playerVolume.value,
-                onChanged: (newValue) {
-                  nativePlayer.setVolume(newValue / 100);
-                  AppSettingsController.instance.setPlayerVolume(newValue);
-                },
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  void showQualitySheet() {
-    if (qualites.isEmpty) {
-      SmartDialog.showToast("清晰度信息还未加载完成");
-      return;
+  Future<void> showDanmuShield() async {
+    final settings = AppSettingsController.instance;
+    final result = await nativePlayer
+        .showPlayerDialog('shield', {'keywords': settings.shieldList.toList()});
+    if (_disposed || result is! List) return;
+    final updated = result.whereType<String>().toSet();
+    for (final old in settings.shieldList.toList()) {
+      if (!updated.contains(old)) settings.removeShieldList(old);
     }
-    Utils.showCompactBottomSheet(
-      title: "切换清晰度",
-      child: Obx(
-        () => RadioGroup(
-          groupValue: currentQuality,
-          onChanged: (e) {
-            Get.back();
-            if (e != null) changePlayQuality(e);
-          },
-          child: ListView.builder(
-            shrinkWrap: true,
-            padding: EdgeInsets.zero,
-            itemCount: qualites.length,
-            itemBuilder: (_, i) {
-              var item = qualites[i];
-              return RadioListTile(
-                value: i,
-                visualDensity: VisualDensity.compact,
-                title: Text(item.quality),
-              );
-            },
-          ),
-        ),
-      ),
-    );
-  }
-
-  void showPlayUrlsSheet() {
-    if (playUrls.isEmpty) {
-      SmartDialog.showToast("线路信息还未加载完成");
-      return;
+    for (final keyword in updated) {
+      settings.addShieldList(keyword);
     }
-    Utils.showCompactBottomSheet(
-      title: "切换线路",
-      child: Obx(() {
-        final connecting = lineConnecting.value;
-        final targetIndex = currentLineIndex;
-        return RadioGroup(
-          groupValue:
-              playingLineIndex.value < 0 ? null : playingLineIndex.value,
-          onChanged: (e) {
-            Get.back();
-            changePlayLine(e ?? 0);
-          },
-          child: ListView.builder(
-            shrinkWrap: true,
-            padding: EdgeInsets.zero,
-            // 接管已有流时 playUrls 还没有地址，用小窗记录的数量占位显示
-            itemCount: effectiveLineCount,
-            itemBuilder: (_, i) {
-              // playUrls 为空（接管场景）时不显示 FLV/HLS 标识，避免误导
-              final hasUrl = i < playUrls.length && playUrls[i].isNotEmpty;
-              return RadioListTile(
-                value: i,
-                visualDensity: VisualDensity.compact,
-                title: Text(connecting && targetIndex == i
-                    ? "线路${i + 1}（连接中）"
-                    : "线路${i + 1}"),
-                secondary: hasUrl
-                    ? Text(playUrls[i].contains(".flv") ? "FLV" : "HLS")
-                    : null,
-              );
-            },
-          ),
-        );
-      }),
-    );
   }
 
-  void showPlayerSettingsSheet() {
-    Utils.showCompactBottomSheet(
-      title: "画面尺寸",
-      child: Obx(
-        () => RadioGroup(
-          groupValue: AppSettingsController.instance.scaleMode.value,
-          onChanged: (e) {
-            AppSettingsController.instance.setScaleMode(e ?? 0);
-          },
-          child: ListView(
-            shrinkWrap: true,
-            padding: AppStyle.edgeInsetsV12,
-            children: const [
-              RadioListTile(
-                value: 0,
-                title: Text("适应"),
-                visualDensity: VisualDensity.compact,
-              ),
-              RadioListTile(
-                value: 1,
-                title: Text("拉伸"),
-                visualDensity: VisualDensity.compact,
-              ),
-              RadioListTile(
-                value: 2,
-                title: Text("铺满"),
-                visualDensity: VisualDensity.compact,
-              ),
-              RadioListTile(
-                value: 3,
-                title: Text("16:9"),
-                visualDensity: VisualDensity.compact,
-              ),
-              RadioListTile(
-                value: 4,
-                title: Text("4:3"),
-                visualDensity: VisualDensity.compact,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+  Future<void> showAutoExitSheet() async {
+    final result = await nativePlayer.showPlayerDialog('autoExitSettings',
+        {'enabled': autoExitEnable.value, 'minutes': autoExitMinutes.value});
+    if (_disposed || result is! Map) return;
+    autoExitEnable.value = result['enabled'] == true;
+    autoExitMinutes.value = (result['minutes'] as num?)?.toInt() ?? 60;
+    AppSettingsController.instance
+        .setRoomAutoExitDuration(autoExitMinutes.value);
+    setAutoExit();
+    syncNativePage();
   }
 
-  void showDanmuShield() {
-    TextEditingController keywordController = TextEditingController();
-
-    void addKeyword() {
-      if (keywordController.text.isEmpty) {
-        SmartDialog.showToast("请输入关键词");
-        return;
-      }
-
-      AppSettingsController.instance
-          .addShieldList(keywordController.text.trim());
-      keywordController.text = "";
-    }
-
-    Utils.showBottomSheet(
-      title: "关键词屏蔽",
-      child: ListView(
-        padding: AppStyle.edgeInsetsA12,
-        children: [
-          TextField(
-            controller: keywordController,
-            decoration: InputDecoration(
-              contentPadding: AppStyle.edgeInsetsH12,
-              border: const OutlineInputBorder(),
-              hintText: "请输入关键词",
-              suffixIcon: TextButton.icon(
-                onPressed: addKeyword,
-                icon: const Icon(Icons.add),
-                label: const Text("添加"),
-              ),
-            ),
-            onSubmitted: (e) {
-              addKeyword();
-            },
-          ),
-          AppStyle.vGap12,
-          Obx(
-            () => Text(
-              "已添加${AppSettingsController.instance.shieldList.length}个关键词（点击移除）",
-              style: Get.textTheme.titleSmall,
-            ),
-          ),
-          AppStyle.vGap12,
-          Obx(
-            () => Wrap(
-              runSpacing: 12,
-              spacing: 12,
-              children: AppSettingsController.instance.shieldList
-                  .map(
-                    (item) => InkWell(
-                      borderRadius: AppStyle.radius24,
-                      onTap: () {
-                        AppSettingsController.instance.removeShieldList(item);
-                      },
-                      child: Container(
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey),
-                          borderRadius: AppStyle.radius24,
-                        ),
-                        padding: AppStyle.edgeInsetsH12.copyWith(
-                          top: 4,
-                          bottom: 4,
-                        ),
-                        child: Text(
-                          item,
-                          style: Get.textTheme.bodyMedium,
-                        ),
-                      ),
-                    ),
-                  )
-                  .toList(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void showAutoExitSheet() {
-    if (AppSettingsController.instance.autoExitEnable.value &&
-        !delayAutoExit.value) {
-      SmartDialog.showToast("已设置了全局定时关闭");
-      return;
-    }
-    Utils.showBottomSheet(
-      title: "定时关闭",
-      child: ListView(
-        children: [
-          Obx(
-            () => SwitchListTile(
-              title: Text(
-                "启用定时关闭",
-                style: Get.textTheme.titleMedium,
-              ),
-              value: autoExitEnable.value,
-              onChanged: (e) {
-                autoExitEnable.value = e;
-
-                setAutoExit();
-                //controller.setAutoExitEnable(e);
-              },
-            ),
-          ),
-          Obx(
-            () => ListTile(
-              enabled: autoExitEnable.value,
-              title: Text(
-                "自动关闭时间：${autoExitMinutes.value ~/ 60}小时${autoExitMinutes.value % 60}分钟",
-                style: Get.textTheme.titleMedium,
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () async {
-                var value = await showTimePicker(
-                  context: Get.context!,
-                  initialTime: TimeOfDay(
-                    hour: autoExitMinutes.value ~/ 60,
-                    minute: autoExitMinutes.value % 60,
-                  ),
-                  initialEntryMode: TimePickerEntryMode.inputOnly,
-                  builder: (_, child) {
-                    return MediaQuery(
-                      data: Get.mediaQuery.copyWith(
-                        alwaysUse24HourFormat: true,
-                      ),
-                      child: child!,
-                    );
-                  },
-                );
-                if (value == null || (value.hour == 0 && value.minute == 0)) {
-                  return;
-                }
-                var duration =
-                    Duration(hours: value.hour, minutes: value.minute);
-                autoExitMinutes.value = duration.inMinutes;
-                AppSettingsController.instance
-                    .setRoomAutoExitDuration(autoExitMinutes.value);
-                //setAutoExitDuration(duration.inMinutes);
-                setAutoExit();
-              },
-            ),
-          ),
-        ],
-      ),
-    );
+  void _showToast(String text) {
+    unawaited(nativePlayer.showPlayerToast(text).catchError((e) {
+      Log.logPrint(e);
+    }));
   }
 
   void openNaviteAPP() async {
@@ -2194,7 +2028,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       await launchUrlString(naviteUrl, mode: LaunchMode.externalApplication);
     } catch (e) {
       Log.logPrint(e);
-      SmartDialog.showToast("无法打开APP，将使用浏览器打开");
+      _showToast("无法打开APP，将使用浏览器打开");
       await launchUrlString(webUrl, mode: LaunchMode.externalApplication);
     }
   }
@@ -2224,13 +2058,13 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     currentQualityInfo.value = '';
     currentLineIndex = -1;
     currentLineInfo.value = '';
-    hasRenderedFirstFrame.value = false;
     error = null;
     loadError.value = false;
 
     // 清除全部消息
     liveDanmaku.stop();
     messages.clear();
+    _pendingNativeMessages.clear();
     superChats.clear();
 
     unawaited(nativePlayer.clearFullscreenDanmaku().catchError((e) {
@@ -2269,7 +2103,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 ${error?.toString()}
 ----------------
 ${error is Error ? (error as Error).stackTrace : ""}''');
-    SmartDialog.showToast("已复制错误信息");
+    _showToast("已复制错误信息");
   }
 
   @override
@@ -2332,26 +2166,19 @@ ${error is Error ? (error as Error).stackTrace : ""}''');
   void onClose() {
     _disposed = true;
     _nativeRoomWorker?.dispose();
+    _nativeMessageTimer?.cancel();
+    _pendingNativeMessages.clear();
     _stablePlaybackTimer?.cancel();
     _retryTimer?.cancel();
     _cancelUrlRefresh();
     WidgetsBinding.instance.removeObserver(this);
-    scrollController.removeListener(scrollListener);
     autoExitTimer?.cancel();
 
     stopHealthCheck();
     liveDanmaku.stop();
     _liveDurationTimer?.cancel(); // 页面关闭时取消定时器
 
-    // 进入悬浮窗时，页面销毁不能释放播放器，否则小窗会黑屏。
-    // 此时只解绑页面侧的 Surface（由原生 SurfaceView 自己在 dispose 时处理），
-    // 播放器与网络流继续存活。
-    if (!isFloating.value) {
-      nativePlayer.release().catchError((e) {
-        Log.logPrint(e);
-      });
-    }
-
+    // 播放器的唯一释放路径在父类：先关闭原生页，再按小窗所有权释放。
     super.onClose();
   }
 }

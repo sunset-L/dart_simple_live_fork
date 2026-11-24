@@ -16,9 +16,6 @@ enum NativePlayerEventType {
   /// 需要把 FloatingSession 的状态补回来。
   floatingRestored,
 
-  /// 首帧已经渲染到纹理，可以撤掉 loading 遮罩
-  firstFrame,
-
   /// 播放参数更新（分辨率 / 码率 / 帧率等）
   ///
   /// 只有面板打开时原生端才会发这个事件；关闭后不再产生。
@@ -216,8 +213,6 @@ class NativePlayerEvent {
         return const NativePlayerEvent(
           type: NativePlayerEventType.floatingRestored,
         );
-      case "firstFrame":
-        return const NativePlayerEvent(type: NativePlayerEventType.firstFrame);
       case "metrics":
         return NativePlayerEvent(
           type: NativePlayerEventType.metrics,
@@ -282,29 +277,43 @@ class SystemVolumeState {
 class NativePlayerBridge {
   NativePlayerBridge._() {
     _activity.setMethodCallHandler((call) async {
-      if (call.method == 'playerFullscreenAction' && call.arguments is Map) {
+      if (call.method == 'playerPageAction' && call.arguments is Map) {
         final data = call.arguments as Map;
         final action = data['action'];
         if (action is String) {
-          onFullscreenAction?.call(action, data['value'] as num?);
+          onPageAction?.call(action, data['value']);
         }
       }
     });
   }
 
-  void Function(String action, num? value)? onFullscreenAction;
+  void Function(String action, dynamic value)? onPageAction;
 
-  Future<void> setInlinePlayer(bool active) =>
-      _activity.invokeMethod<void>('setPlayerInline', active);
+  Future<void> openPlayerPage(Map<String, dynamic> data) =>
+      _activity.invokeMethod<void>('openPlayerPage', data);
 
-  Future<void> showFullscreenPlayer(Map<String, dynamic> data) =>
-      _activity.invokeMethod<void>('showPlayerFullscreen', data);
+  Future<void> closePlayerPage() =>
+      _activity.invokeMethod<void>('closePlayerPage');
 
-  Future<void> hideFullscreenPlayer() =>
-      _activity.invokeMethod<void>('hidePlayerFullscreen');
+  Future<void> setPlayerFullscreen(bool fullscreen, bool landscape) =>
+      _activity.invokeMethod<void>('setPlayerFullscreen',
+          {'fullscreen': fullscreen, 'landscape': landscape});
 
-  Future<void> updateFullscreenPlayer(Map<String, dynamic> data) =>
-      _activity.invokeMethod<void>('updatePlayerFullscreen', data);
+  Future<void> updatePlayerPage(Map<String, dynamic> data) =>
+      _activity.invokeMethod<void>('updatePlayerPage', data);
+
+  Future<dynamic> showPlayerDialog(String kind,
+          [Map<String, dynamic> data = const {}]) =>
+      _activity.invokeMethod('showPlayerDialog', {'kind': kind, ...data});
+
+  Future<void> showPlayerToast(String text) =>
+      _activity.invokeMethod<void>('playerToast', text);
+
+  Future<void> replacePlayerMessages(List<Map<String, dynamic>> messages) =>
+      _activity.invokeMethod<void>('replacePlayerMessages', messages);
+
+  Future<void> addPlayerMessages(List<Map<String, dynamic>> messages) =>
+      _activity.invokeMethod<void>('addPlayerMessages', messages);
 
   Future<void> clearFullscreenDanmaku() =>
       _activity.invokeMethod<void>('clearPlayerFullscreenDanmaku');
@@ -330,7 +339,7 @@ class NativePlayerBridge {
   /// 关键：getter 里必须保证原生 EventChannel 已经订阅上。
   ///
   /// 之前这里只返回 [_controller].stream，而真正的原生订阅
-  /// [_ensureListening] 只在 initTexture / open / switchSource 里调。
+  /// [_ensureListening] 只在 open / switchSource 里调。
   /// 「一路返回退到桌面再点小窗」这条路径上，Dart 侧跑完 main() 后
   /// 只会执行 [FloatingSession.init] → 订阅这个 Dart 流，
   /// **没有任何一处会去订阅原生 EventChannel**，
@@ -387,25 +396,6 @@ class NativePlayerBridge {
     );
   }
 
-  /// 初始化视频纹理，返回 Flutter 纹理 id
-  ///
-  /// 画面不走 PlatformView，而是走 Flutter 外部纹理，
-  /// 这样视频帧能进入 Flutter 渲染管线，弹幕与控件才能正常叠加。
-  Future<int?> initTexture() async {
-    _ensureListening();
-    try {
-      return await _method.invokeMethod<int>("initTexture");
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<void> releaseTexture() async {
-    try {
-      await _method.invokeMethod("releaseTexture");
-    } catch (_) {}
-  }
-
   Future<void> open(String url,
       {Map<String, String>? headers, bool forceReload = false}) async {
     _ensureListening();
@@ -420,7 +410,7 @@ class NativePlayerBridge {
     await _method.invokeMethod("play");
   }
 
-  /// 无缝换源：保留播放器实例与纹理绑定，只替换媒体源
+  /// 无缝换源：保留播放器实例与原生视图绑定，只替换媒体源
   ///
   /// 与 [open] 的区别：open 会重置首帧标记，Dart 侧随之盖上 loading 遮罩，
   /// 表现为黑屏转圈。switchSource 不做这个重置，画面上上一帧还在，
@@ -464,23 +454,6 @@ class NativePlayerBridge {
     }
   }
 
-  /// 播放器全屏方向控制
-  ///
-  /// 点击切屏指定确定方向，原生传感器仅在真实横向姿态稳定后翻向。
-  /// 不修改系统旋转动画，不在 Flutter 中重复旋转画面。
-  /// - `landscape`：横屏内容全屏，允许稳定的左右横屏姿态切换
-  /// - `portrait`：竖屏内容全屏用（PORTRAIT，锁定竖屏）
-  /// - `restore`：固定到竖屏播放页方向，供播放器完成退出动画
-  /// - `auto`：退出全屏时恢复进入前的方向策略
-  /// 退出时先恢复竖屏播放页，再恢复原方向策略，兼容系统应用小窗。
-  Future<void> setScreenOrientation(String mode) async {
-    try {
-      await _method.invokeMethod("setScreenOrientation", mode);
-    } catch (_) {
-      // 旧原生实现没有这个方法时静默忽略
-    }
-  }
-
   Future<void> stop() async {
     await _method.invokeMethod("stop");
   }
@@ -511,29 +484,6 @@ class NativePlayerBridge {
   Future<bool> isPlaying() async {
     final result = await _method.invokeMethod<bool>("isPlaying");
     return result ?? false;
-  }
-
-  /// 是否已经有画面帧
-  ///
-  /// 从悬浮小窗回到页面时纹理是复用的，首帧事件不会再发一次，
-  /// 需要主动查一下，否则页面会一直卡在 loading。
-  Future<bool> hasRenderedFrame() async {
-    try {
-      final result = await _method.invokeMethod<bool>("hasRenderedFrame");
-      return result ?? false;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /// 复位首帧标记，旧帧由页面加载层遮挡，保留纹理和解码缓冲区尺寸。
-  Future<void> clearTexture() async {
-    try {
-      await _method.invokeMethod<bool>("clearTexture");
-    } catch (_) {
-      // 兼容旧原生实现：没有这个方法时静默忽略，
-      // 上层仍会用不透明黑底盖住，观感上不会露帧。
-    }
   }
 
   /// 当前视频的真实分辨率
@@ -687,8 +637,7 @@ class NativePlayerBridge {
 
   // ------------------------------------------------------------ 小窗弹幕
   //
-  // 小窗是系统悬浮窗（原生 SurfaceView），进小窗时直播页已 pop，
-  // Flutter 的弹幕层不复存在，所以弹幕由原生绘制。
+  // 小窗是系统悬浮窗（原生 TextureView），弹幕同样由原生绘制。
   // 这里只负责把「开关 / 样式 / 内容」送过去。
 
   /// 开关小窗弹幕显示
