@@ -64,7 +64,9 @@ internal class NativeAutoExitDialog(
 
     override fun onStart() {
         super.onStart()
-        window?.setLayout(minOf(style.dp(560), context.resources.displayMetrics.widthPixels - style.dp(80)), -2)
+        // 旧 AlertDialog 按内容收紧，这段短文案落在默认 280dp；不要按大屏上限撑满。
+        window?.setLayout(minOf(style.dp(280),
+            (context.resources.displayMetrics.widthPixels - style.dp(80)).coerceAtLeast(1)), -2)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
