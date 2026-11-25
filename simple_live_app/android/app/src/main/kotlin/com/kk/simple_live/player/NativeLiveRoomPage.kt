@@ -69,6 +69,8 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
     private var autoScroll = true
     private var sheet: NativePlayerSheet? = null
     private var durationDialog: android.app.Dialog? = null
+    private var autoExitDialog: NativeAutoExitDialog? = null
+    private var autoExitResult: MethodChannel.Result? = null
     private var sheetResult: MethodChannel.Result? = null
     private var sheetRefresh: (() -> Unit)? = null
     private var roomPager: NativePlayerPager? = null
@@ -239,7 +241,8 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
                 adapter.items.getOrNull(index)?.get("message")?.toString()?.let { text -> showMessageActions(text) }; true
             } else false }
             if (name == "关注") {
-                followRefresh = NativePlayerRefresh(activity, list, style) { onAction("reloadFollow", null) }
+                followRefresh = NativePlayerRefresh(activity, list, style,
+                    listWithEmpty(list, "暂无直播中的关注")) { onAction("reloadFollow", null) }
                 pager.addView(followRefresh)
             } else pager.addView(list)
         }
@@ -254,6 +257,16 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
             label.setTextColor(if (selected) style.primary else style.foreground)
 
         }
+    }
+    private fun listWithEmpty(list: ListView, message: String): FrameLayout {
+        val content = FrameLayout(activity).apply { isClickable = true }
+        content.addView(list, FrameLayout.LayoutParams(-1, -1))
+        val empty = style.text(message, 14f, style.secondary).apply {
+            gravity = Gravity.CENTER; setPadding(dp(16), dp(24), dp(16), dp(24))
+        }
+        content.addView(empty, FrameLayout.LayoutParams(-1, -1))
+        list.emptyView = empty
+        return content
     }
     private fun newList() = ListView(activity).apply { setSelector(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)); divider = null; isVerticalScrollBarEnabled = false; isHorizontalScrollBarEnabled = false; overScrollMode = OVER_SCROLL_NEVER; clipToPadding = false }
     private fun savePositions() { for ((name, list) in lists) if (list.adapter != null) positions[name] = Pair(list.firstVisiblePosition, list.getChildAt(0)?.top ?: 0) }
@@ -421,93 +434,100 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
         sheetRefresh = null; roomPager?.dispose(); roomPager = null; sheet?.dispose(); sheet = null
         val result = sheetResult; sheetResult = null; result?.success(null)
     }
-    fun dismissOverlay(): Boolean { val popup = sheet ?: return false; popup.dismiss(); return true }
+    fun dismissOverlay(): Boolean {
+        // 到期提示与旧版 PopScope 一样，返回键不能跳过自动关闭。
+        if (autoExitDialog?.isShowing == true) return true
+        durationDialog?.let { it.dismiss(); return true }
+        val popup = sheet ?: return false
+        popup.dismiss(); return true
+    }
     private fun answer(value: Any?) { val result = sheetResult; sheetResult = null; result?.success(value); sheet?.dismiss() }
     fun showDialog(kind: String, values: Map<*, *>, result: MethodChannel.Result) {
         when (kind) {
             "playbackInfo" -> { showPlaybackInfo(values); result.success(null) }
-            "shield", "autoExitSettings", "autoExit" -> {
-                val popup = beginSheet(if (kind == "shield") "关键词屏蔽" else "定时关闭", side = false, heightPx = dp(if (kind == "shield") 340 else if (kind == "autoExitSettings") 180 else 280) + safeBottom)
+            "autoExit" -> showAutoExitPrompt(result)
+            "autoExitSettings" -> showAutoExitSettings(values, result)
+            "shield" -> {
+                val popup = beginSheet("关键词屏蔽", side = false, heightPx = dp(340) + safeBottom)
                 sheetResult = result
-                if (kind == "shield") {
-                    val input = NativePlayerInput(activity, style).apply {
-                        setText((values["keywords"] as? List<*>)?.joinToString("\n") ?: "")
-                        hint = "每行一个关键词，正则使用 /表达式/"
-                        inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
-                        textSize = 14f; gravity = Gravity.TOP
-                    }
-                    popup.panel.addView(input, LinearLayout.LayoutParams(-1, 0, 1f).apply { setMargins(dp(16), dp(12), dp(16), dp(8)) }); popup.panel.addView(action("", "保存") { answer(input.text.toString().lines().map { it.trim() }.filter { it.isNotEmpty() }) }, LinearLayout.LayoutParams(-1, dp(48)))
-                } else if (kind == "autoExitSettings") {
-                    var enabled = values["enabled"] == true
-                    var minutes = (values["minutes"] as? Number)?.toInt()?.coerceIn(1, 1439) ?: 60
-                    val row = LinearLayout(activity).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), 0, dp(16), 0) }
-                    row.addView(style.text("启用定时关闭", 16f), LinearLayout.LayoutParams(0, -2, 1f))
-                    val toggle = NativePlayerSwitch(activity, style).apply { isChecked = enabled; contentDescription = "启用定时关闭" }
-                    row.addView(toggle); popup.panel.addView(row, LinearLayout.LayoutParams(-1, dp(56)))
-                    val timeRow = LinearLayout(activity).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), 0, dp(16), 0) }
-                    val time = style.text("", 16f)
-                    timeRow.addView(time, LinearLayout.LayoutParams(0, -2, 1f))
-                    timeRow.addView(ImageView(activity).apply { setImageDrawable(NativeIcons.drawable("chevron", style.foreground)) }, LinearLayout.LayoutParams(dp(24), dp(24)))
-                    fun refreshTime() { time.text = "自动关闭时间：${minutes / 60}小时${minutes % 60}分钟"; timeRow.isEnabled = enabled; timeRow.alpha = if (enabled) 1f else .38f }
-                    fun changed() { refreshTime(); onAction("autoExitChanged", mapOf("enabled" to enabled, "minutes" to minutes)) }
-                    toggle.setOnCheckedChangeListener { _, checked -> enabled = checked; changed() }
-                    style.click(timeRow) { if (enabled) showDurationInput(minutes) { minutes = it; changed() } }
-                    popup.panel.addView(timeRow, LinearLayout.LayoutParams(-1, dp(56))); refreshTime()
-                } else {
-                    popup.panel.addView(style.text("播放时间已到，是否关闭直播间？").apply { setPadding(dp(16), dp(12), dp(16), dp(12)) })
-                    for ((label, value) in listOf("继续播放" to "delay", "关闭直播间" to "closeLive", "退出应用" to "exitApplication")) popup.panel.addView(action("", label) { answer(value) }, LinearLayout.LayoutParams(-1, dp(44)))
+                val input = NativePlayerInput(activity, style).apply {
+                    setText((values["keywords"] as? List<*>)?.joinToString("\n") ?: "")
+                    hint = "每行一个关键词，正则使用 /表达式/"
+                    inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                    textSize = 14f; gravity = Gravity.TOP
                 }
+                popup.panel.addView(input, LinearLayout.LayoutParams(-1, 0, 1f).apply { setMargins(dp(16), dp(12), dp(16), dp(8)) })
+                popup.panel.addView(action("", "保存") {
+                    answer(input.text.toString().lines().map { it.trim() }.filter { it.isNotEmpty() })
+                }, LinearLayout.LayoutParams(-1, dp(48)))
             }
             else -> { showPanel(kind); result.success(null) }
         }
     }
+    private fun showAutoExitSettings(values: Map<*, *>, result: MethodChannel.Result) {
+        // 旧 Utils.showBottomSheet 是约半屏的底部面板，不是 180dp 的紧凑弹层。
+        val popup = beginSheet("定时关闭", side = false)
+        sheetResult = result
+        (popup.panel.getChildAt(0) as? ViewGroup)?.let { header ->
+            header.setPadding(dp(12), 0, dp(4), 0)
+            (header.getChildAt(0) as? TextView)?.setTypeface(null, Typeface.NORMAL)
+        }
+        var enabled = values["enabled"] == true
+        var minutes = (values["minutes"] as? Number)?.toInt()?.coerceIn(1, 1439) ?: 60
+        val row = LinearLayout(activity).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), 0, dp(16), 0) }
+        row.addView(style.text("启用定时关闭", 16f), LinearLayout.LayoutParams(0, -2, 1f))
+        val toggle = NativePlayerSwitch(activity, style).apply { isChecked = enabled; contentDescription = "启用定时关闭" }
+        row.addView(toggle)
+        popup.panel.addView(row, LinearLayout.LayoutParams(-1, dp(56)))
+        val timeRow = LinearLayout(activity).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), 0, dp(16), 0) }
+        val time = style.text("", 16f)
+        timeRow.addView(time, LinearLayout.LayoutParams(0, -2, 1f))
+        timeRow.addView(ImageView(activity).apply { setImageDrawable(NativeIcons.drawable("chevron", style.foreground)) },
+            LinearLayout.LayoutParams(dp(24), dp(24)))
+        fun refreshTime() {
+            time.text = "自动关闭时间：${minutes / 60}小时${minutes % 60}分钟"
+            timeRow.isEnabled = enabled; timeRow.alpha = if (enabled) 1f else .38f
+        }
+        fun changed(durationSelected: Boolean = false) {
+            refreshTime()
+            onAction("autoExitChanged", mapOf("enabled" to enabled, "minutes" to minutes,
+                "durationSelected" to durationSelected))
+        }
+        toggle.setOnCheckedChangeListener { _, checked -> enabled = checked; changed() }
+        style.click(row) { toggle.isChecked = !toggle.isChecked }
+        style.click(timeRow) {
+            if (enabled) showDurationInput(minutes) { minutes = it; changed(true) }
+        }
+        popup.panel.addView(timeRow, LinearLayout.LayoutParams(-1, dp(56)))
+        refreshTime()
+    }
     private fun showDurationInput(minutes: Int, selected: (Int) -> Unit) {
-        val box = LinearLayout(activity).apply { gravity = Gravity.CENTER; setPadding(dp(24), dp(20), dp(24), dp(8)) }
-        fun number(value: Int, label: String): EditText {
-            val field = NativePlayerInput(activity, style).apply {
-                inputType = android.text.InputType.TYPE_CLASS_NUMBER; filters = arrayOf(android.text.InputFilter.LengthFilter(2))
-                setText(value.toString().padStart(2, '0')); textSize = 28f; gravity = Gravity.CENTER
-                setTextColor(style.foreground); background = NativeIcons.background(style.background, dp(8).toFloat())
-                setPadding(dp(8), dp(12), dp(8), dp(12)); contentDescription = label; setSelectAllOnFocus(true)
+        durationDialog?.dismiss()
+        val popup = NativePlayerDurationDialog(activity, style, minutes, selected)
+        durationDialog = popup
+        popup.setOnDismissListener { if (durationDialog === popup) durationDialog = null }
+        popup.show()
+    }
+    private fun clearAutoExitPrompt() {
+        val popup = autoExitDialog; autoExitDialog = null
+        val result = autoExitResult; autoExitResult = null
+        popup?.dismiss(); result?.success(null)
+    }
+    private fun showAutoExitPrompt(result: MethodChannel.Result) {
+        clearSheet(); clearAutoExitPrompt()
+        lateinit var popup: NativeAutoExitDialog
+        popup = NativeAutoExitDialog(activity, style) { action ->
+            if (autoExitDialog === popup) {
+                autoExitDialog = null
+                val response = autoExitResult; autoExitResult = null
+                response?.success(action)
             }
-            box.addView(LinearLayout(activity).apply {
-                orientation = LinearLayout.VERTICAL
-                addView(field, LinearLayout.LayoutParams(-1, dp(64)))
-                addView(style.text(label, 12f, Color.GRAY).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(-1, dp(28)))
-            }, LinearLayout.LayoutParams(0, -2, 1f))
-            return field
         }
-        val hour = number(minutes / 60, "小时")
-        box.addView(style.text(":", 28f).apply { gravity = Gravity.CENTER; setPadding(dp(12), 0, dp(12), dp(24)) })
-        val minute = number(minutes % 60, "分钟")
-        // 应用宿主不是 Material Activity，不能直接用默认 AlertDialog（部分手机是黑色旧皮肤）。
-        val dialog = android.app.Dialog(activity)
-        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
-        val card = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            background = NativeIcons.background(style.sheetSurface, dp(24).toFloat())
-            setPadding(0, dp(8), 0, dp(8))
+        autoExitDialog = popup; autoExitResult = result
+        popup.setOnDismissListener {
+            if (autoExitDialog === popup) clearAutoExitPrompt()
         }
-        card.addView(style.text("设置自动关闭时间", 20f).apply { setPadding(dp(24), dp(16), dp(24), dp(4)) })
-        card.addView(box)
-        val buttons = LinearLayout(activity).apply { gravity = Gravity.END; setPadding(dp(16), dp(8), dp(16), 0) }
-        buttons.addView(action("", "取消") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(72), dp(48)))
-        buttons.addView(action("", "确定") {
-            val h = hour.text.toString().toIntOrNull(); val m = minute.text.toString().toIntOrNull()
-            when {
-                h == null || h !in 0..23 -> hour.error = "请输入0至23小时"
-                m == null || m !in 0..59 -> minute.error = "请输入0至59分钟"
-                h == 0 && m == 0 -> minute.error = "关闭时间不能为0"
-                else -> { selected(h * 60 + m); dialog.dismiss() }
-            }
-        }, LinearLayout.LayoutParams(dp(72), dp(48)))
-        card.addView(buttons)
-        dialog.setContentView(card)
-        durationDialog = dialog
-        dialog.setOnDismissListener { if (durationDialog === dialog) durationDialog = null }
-        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
-        dialog.show()
-        dialog.window?.setLayout(minOf(dp(360), width - dp(48)), -2)
+        popup.show()
     }
     private fun choose(title: String, items: List<String>, selected: Int, clicked: (Int) -> Unit) {
         val popup = beginSheet(title, side = false, heightPx = (dp(56 + items.size.coerceIn(1, 4) * 48) + safeBottom).coerceAtMost((height * .85).toInt()))
@@ -599,8 +619,10 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
         val pages = NativePlayerPager(activity); roomPager = pages; pages.onPanelDrag = popup::drag
         val followList = newList(); val historyList = newList(); val followAdapter = RoomAdapter("关注"); val historyAdapter = RoomAdapter("历史")
         followList.adapter = followAdapter; historyList.adapter = historyAdapter
-        val followPull = NativePlayerRefresh(activity, followList, style) { onAction("reloadFollow", null) }
-        val historyPull = NativePlayerRefresh(activity, historyList, style) { onAction("reloadHistory", null) }
+        val followPull = NativePlayerRefresh(activity, followList, style,
+            listWithEmpty(followList, "暂无直播中的关注")) { onAction("reloadFollow", null) }
+        val historyPull = NativePlayerRefresh(activity, historyList, style,
+            listWithEmpty(historyList, "暂无观看历史")) { onAction("reloadHistory", null) }
         pages.addView(followPull); pages.addView(historyPull)
         var locked = data["roomListLocked"] != false
         for ((index, label) in listOf("关注", "历史").withIndex()) headings.addView(action(if (index == 0) "followTab" else "history", label) { pages.select(index) }, LinearLayout.LayoutParams(0, dp(48), 1f))
@@ -625,5 +647,5 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
         popup.panel.addView(action("followFilled", "确定取消") { onAction("unfollow", null); popup.dismiss() }, LinearLayout.LayoutParams(-1, dp(48)))
     }
     private fun showMessageActions(text: String) { choose("弹幕操作", listOf("复制", "屏蔽该关键词"), -1) { onAction(if (it == 0) "copyMessage" else "addShield", text) } }
-    fun dispose() { disposed = true; clearSheet(); pager.dispose(); lists.values.forEach { it.adapter = null }; chat.clear(); unreadChat.clear(); NativeAvatar.clear(avatar); video.dispose() }
+    fun dispose() { disposed = true; clearAutoExitPrompt(); clearSheet(); pager.dispose(); lists.values.forEach { it.adapter = null }; chat.clear(); unreadChat.clear(); NativeAvatar.clear(avatar); video.dispose() }
 }

@@ -166,6 +166,13 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         'foregroundColor':
             (Get.theme.textTheme.bodyLarge?.color ?? Colors.black).toARGB32(),
         'primaryColor': Get.theme.colorScheme.primary.toARGB32(),
+        'dialogColor': Get.theme.colorScheme.surfaceContainerHigh.toARGB32(),
+        'inputColor': Get.theme.colorScheme.surfaceContainerHighest.toARGB32(),
+        'primaryContainerColor':
+            Get.theme.colorScheme.primaryContainer.toARGB32(),
+        'onPrimaryContainerColor':
+            Get.theme.colorScheme.onPrimaryContainer.toARGB32(),
+        'errorColor': Get.theme.colorScheme.error.toARGB32(),
         'siteId': site.id,
         'roomId': roomId,
         'siteLogo': site.logo,
@@ -458,10 +465,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         return;
       case 'autoExitChanged':
         if (value is Map) {
+          final minutes =
+              ((value['minutes'] as num?)?.toInt() ?? 60).clamp(1, 1439);
+          final durationChanged = autoExitMinutes.value != minutes;
           autoExitEnable.value = value['enabled'] == true;
-          autoExitMinutes.value = (value['minutes'] as num?)?.toInt() ?? 60;
-          AppSettingsController.instance
-              .setRoomAutoExitDuration(autoExitMinutes.value);
+          autoExitMinutes.value = minutes;
+          // 选择器确认即保存房间时长（含同值确认），开关不会覆盖记忆值。
+          if (durationChanged || value['durationSelected'] == true) {
+            AppSettingsController.instance.setRoomAutoExitDuration(minutes);
+          }
           setAutoExit();
           syncNativePage();
         }
@@ -626,11 +638,13 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   void setAutoExit() {
+    autoExitTimer?.cancel();
+    autoExitTimer = null;
     if (!autoExitEnable.value) {
-      autoExitTimer?.cancel();
+      _autoExitDeadline = null;
+      countdown.value = 0;
       return;
     }
-    autoExitTimer?.cancel();
     _autoExitDeadline =
         DateTime.now().add(Duration(minutes: autoExitMinutes.value));
     _resumeAutoExitCountdown();
@@ -680,8 +694,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     switch (action) {
       case 'delay':
         delayAutoExit.value = true;
-        await showAutoExitSheet();
+        // 原版点击“延迟”就立即按当前时长续计时，设置面板关闭不能再重置一次。
         setAutoExit();
+        unawaited(showAutoExitSheet());
         break;
       case 'closeLive':
         delayAutoExit.value = false;

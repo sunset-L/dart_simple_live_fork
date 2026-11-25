@@ -21,6 +21,11 @@ class NativePlayerStyle(val context: Context, private val data: Map<*, *>) {
     val foreground = color("foregroundColor", if (dark) Color.WHITE else 0xFF333333.toInt())
     val primary = color("primaryColor", 0xFF3498DB.toInt())
     val secondary = Color.GRAY
+    val dialogSurface = color("dialogColor", sheetSurface)
+    val inputSurface = color("inputColor", if (dark) 0xFF49454F.toInt() else 0xFFE7E0EC.toInt())
+    val primaryContainer = color("primaryContainerColor", surface)
+    val onPrimaryContainer = color("onPrimaryContainerColor", foreground)
+    val error = color("errorColor", 0xFFB3261E.toInt())
     val divider = 0x339E9E9E
     fun dp(v: Int) = (v * context.resources.displayMetrics.density).roundToInt()
     fun text(value: String, size: Float = 14f, color: Int = foreground) = TextView(context).apply {
@@ -75,13 +80,20 @@ class NativePlayerPager(context: Context) : ViewGroup(context) {
         for (i in 0 until childCount) getChildAt(i).layout(i * width, 0, (i + 1) * width, height)
         if (changed && !dragging) { animation?.cancel(); offset = index * width.toFloat(); applyOffset() }
     }
+    private fun trackMovement(event: MotionEvent) {
+        // 面板本身会跟手平移，局部坐标也会随之变化；位置和速度都必须以屏幕为基准。
+        val screenEvent = MotionEvent.obtain(event)
+        screenEvent.offsetLocation(event.rawX - event.x, event.rawY - event.y)
+        velocity?.addMovement(screenEvent)
+        screenEvent.recycle()
+    }
     override fun onInterceptTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                animation?.cancel(); downX = e.x; downY = e.y; initial = offset; fromFirst = offset <= 1; panelOffset = 0f; dragging = false
-                velocity?.recycle(); velocity = VelocityTracker.obtain(); velocity?.addMovement(e)
+                animation?.cancel(); downX = e.rawX; downY = e.rawY; initial = offset; fromFirst = offset <= 1; panelOffset = 0f; dragging = false
+                velocity?.recycle(); velocity = VelocityTracker.obtain(); trackMovement(e)
             }
-            MotionEvent.ACTION_MOVE -> if (abs(e.x - downX) > slop && abs(e.x - downX) > abs(e.y - downY)) {
+            MotionEvent.ACTION_MOVE -> if (abs(e.rawX - downX) > slop && abs(e.rawX - downX) > abs(e.rawY - downY)) {
                 dragging = true; parent.requestDisallowInterceptTouchEvent(true); return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { velocity?.recycle(); velocity = null }
@@ -89,10 +101,10 @@ class NativePlayerPager(context: Context) : ViewGroup(context) {
         return dragging
     }
     override fun onTouchEvent(e: MotionEvent): Boolean {
-        velocity?.addMovement(e)
+        trackMovement(e)
         when (e.actionMasked) {
             MotionEvent.ACTION_MOVE -> {
-                val raw = initial - (e.x - downX)
+                val raw = initial - (e.rawX - downX)
                 panelOffset = if (fromFirst && raw < 0 && onPanelDrag != null) -raw else 0f
                 if (onPanelDrag != null) onPanelDrag?.invoke(panelOffset, null)
                 offset = raw.coerceIn(0f, ((childCount - 1) * width).coerceAtLeast(0).toFloat())
@@ -259,13 +271,13 @@ class NativePlayerSlider(context: Context, style: NativePlayerStyle) : SeekBar(c
 
 /** 使用标准下拉进度、回弹和刷新动画；方向锁只负责让出横向分页手势。 */
 class NativePlayerRefresh(context: Context, val list: ListView, style: NativePlayerStyle,
-    refresh: () -> Unit) : SwipeRefreshLayout(context) {
+    content: View = list, refresh: () -> Unit) : SwipeRefreshLayout(context) {
     private var downX = 0f
     private var downY = 0f
     private var horizontal = false
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
     init {
-        addView(list, LayoutParams(-1, -1))
+        addView(content, LayoutParams(-1, -1))
         setColorSchemeColors(style.primary)
         setProgressBackgroundColorSchemeColor(style.surface)
         setOnChildScrollUpCallback { _, _ -> list.canScrollVertically(-1) }
@@ -274,10 +286,10 @@ class NativePlayerRefresh(context: Context, val list: ListView, style: NativePla
     override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                downX = event.x; downY = event.y; horizontal = false
+                downX = event.rawX; downY = event.rawY; horizontal = false
             }
             MotionEvent.ACTION_MOVE -> {
-                val dx = abs(event.x - downX); val dy = abs(event.y - downY)
+                val dx = abs(event.rawX - downX); val dy = abs(event.rawY - downY)
                 if (dx > slop && dx > dy) horizontal = true
                 if (horizontal) return false
             }
