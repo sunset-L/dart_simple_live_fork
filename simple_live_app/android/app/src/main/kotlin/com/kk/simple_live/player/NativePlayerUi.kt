@@ -21,6 +21,8 @@ class NativePlayerStyle(val context: Context, private val data: Map<*, *>) {
     val foreground = color("foregroundColor", if (dark) Color.WHITE else 0xFF333333.toInt())
     val primary = color("primaryColor", 0xFF3498DB.toInt())
     val secondary = Color.GRAY
+    val tabInactive = color("tabInactiveColor", foreground)
+    val tabDivider = color("tabDividerColor", 0x339E9E9E)
     val dialogSurface = color("dialogColor", sheetSurface)
     val inputSurface = color("inputColor", if (dark) 0xFF49454F.toInt() else 0xFFE7E0EC.toInt())
     val primaryContainer = color("primaryContainerColor", surface)
@@ -52,6 +54,11 @@ class NativePlayerPager(context: Context) : ViewGroup(context) {
     private var offset = 0f
     private var panelOffset = 0f
     private var dragging = false
+    val isDragging: Boolean get() = dragging
+    val isSettling: Boolean get() = animation?.isRunning == true
+    // 播放页可对齐首页 TabController 节奏，列表弹窗保留原有 220ms。
+    var settleDurationMs = 220L
+    var settleInterpolator: android.animation.TimeInterpolator = DecelerateInterpolator()
     private var fromFirst = false
     private var velocity: VelocityTracker? = null
     private var animation: ValueAnimator? = null
@@ -66,7 +73,7 @@ class NativePlayerPager(context: Context) : ViewGroup(context) {
         animation?.cancel()
         if (!animate || width == 0) { offset = target * width.toFloat(); applyOffset(); return }
         animation = ValueAnimator.ofFloat(offset, target * width.toFloat()).apply {
-            duration = 220; interpolator = DecelerateInterpolator()
+            duration = settleDurationMs; interpolator = settleInterpolator
             addUpdateListener { offset = it.animatedValue as Float; applyOffset() }
             start()
         }

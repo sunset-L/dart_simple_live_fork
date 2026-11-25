@@ -166,6 +166,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         'foregroundColor':
             (Get.theme.textTheme.bodyLarge?.color ?? Colors.black).toARGB32(),
         'primaryColor': Get.theme.colorScheme.primary.toARGB32(),
+        'tabInactiveColor': Get.theme.colorScheme.onSurfaceVariant.toARGB32(),
+        'tabDividerColor': Get.theme.colorScheme.outlineVariant.toARGB32(),
         'dialogColor': Get.theme.colorScheme.surfaceContainerHigh.toARGB32(),
         'inputColor': Get.theme.colorScheme.surfaceContainerHighest.toARGB32(),
         'primaryContainerColor':

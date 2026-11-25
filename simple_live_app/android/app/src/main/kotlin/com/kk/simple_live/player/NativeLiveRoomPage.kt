@@ -2,6 +2,8 @@ package com.kk.simple_live.player
 
 import android.app.Activity
 import android.graphics.Color
+import android.graphics.Path
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.text.SpannableStringBuilder
 import android.text.TextUtils
@@ -13,6 +15,9 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.media3.exoplayer.ExoPlayer
 import io.flutter.plugin.common.MethodChannel
 import kotlin.math.roundToInt
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
 
 /** 播放页仍是完整 Android View；视觉与交互遵循重构前的 Flutter 页面。 */
 class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
@@ -34,19 +39,32 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
     private val fire = ImageView(activity)
     private var tabPosition = 0f
     private val tabPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+    private val tabIndicatorPath = Path()
+    private var tabMotionFrom = 0f
+    private var tabMotionTarget = 0
+    private var tabMotionStart = RectF()
+    private var tabMotionColors = IntArray(0)
     private val tabs = object : LinearLayout(activity) {
         override fun dispatchDraw(canvas: android.graphics.Canvas) {
             super.dispatchDraw(canvas)
             if (childCount == 0) return
-            tabPaint.color = style.divider
+            tabPaint.color = style.tabDivider
             canvas.drawRect(0f, height - dp(1).toFloat(), width.toFloat(), height.toFloat(), tabPaint)
-            val tabWidth = width.toFloat() / childCount
+            val bounds = tabIndicatorBounds(tabPosition)
+            bounds.top = height - dp(3).toFloat(); bounds.bottom = height.toFloat()
             tabPaint.color = style.primary
-            canvas.drawRect(tabWidth * tabPosition, height - dp(3).toFloat(),
-                tabWidth * (tabPosition + 1f), height.toFloat(), tabPaint)
+            val radius = dp(3).toFloat()
+            tabIndicatorPath.reset()
+            tabIndicatorPath.addRoundRect(bounds,
+                floatArrayOf(radius, radius, radius, radius, 0f, 0f, 0f, 0f), Path.Direction.CW)
+            canvas.drawPath(tabIndicatorPath, tabPaint)
         }
     }
-    private val pager = NativePlayerPager(activity)
+    private val pager = NativePlayerPager(activity).apply {
+        settleDurationMs = 300L
+        // 首页 TabController.animateTo 默认 300ms / Curves.ease。
+        settleInterpolator = android.view.animation.PathInterpolator(.25f, .1f, .25f, 1f)
+    }
     private val bottom = LinearLayout(activity)
     /** 关注/刷新/分享只在方向切换结束、最终布局稳定后出现，不参与视频缩放。 */
     fun setPageActionsTransitioning(value: Boolean) {
@@ -105,7 +123,7 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
         popularity.textSize = 14f; profile.addView(popularity); addView(profile)
         addView(tabs); addView(pager)
         pager.onScrollPosition = { position ->
-            tabPosition = position; tabs.invalidate()
+            tabPosition = position; paintTabColors(); tabs.invalidate()
             // 拖动时让相邻页有内容，不能等松手选中后才绑定空列表。
             if (!fullscreen) for (index in listOf(kotlin.math.floor(position).toInt(), kotlin.math.ceil(position).toInt()).distinct()) {
                 val name = tabNames.getOrNull(index) ?: continue
@@ -116,7 +134,15 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
                 }
             }
         }
-        pager.onSelected = { index -> tabNames.getOrNull(index)?.let { activeTab = it; bindVisibleList(); paintTabs() } }
+        pager.onSelected = { index ->
+            // 连续点击从当前实际形状接续，跨两个 Tab 不在中间标签处突然收缩。
+            tabMotionStart = tabIndicatorBounds(tabPosition)
+            tabMotionColors = IntArray(tabs.childCount) {
+                ((tabs.getChildAt(it) as FrameLayout).getChildAt(0) as TextView).currentTextColor
+            }
+            tabMotionFrom = tabPosition; tabMotionTarget = index
+            tabNames.getOrNull(index)?.let { activeTab = it; bindVisibleList(); paintTabs() }
+        }
         bottom.gravity = Gravity.CENTER_VERTICAL
         for (button in listOf(follow, action("refresh", "刷新") { onAction("refresh", null) }, action("share", "分享") { onAction("share", null) })) bottom.addView(button, LinearLayout.LayoutParams(0, -1, 1f))
         style.click(follow) { if (data["followed"] == true) confirmUnfollow() else onAction("follow", null) }; addView(bottom)
@@ -213,7 +239,9 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
         pager.dispose(); pager.removeAllViews(); tabs.removeAllViews(); followRefresh = null; lists.clear(); adapters.clear(); tabNames = names
         if (activeTab !in names) activeTab = "聊天"
         for (name in names) {
-            val cell = FrameLayout(activity); cell.addView(style.text(name).apply { gravity = Gravity.CENTER }, FrameLayout.LayoutParams(-1, -1))
+            val cell = FrameLayout(activity); cell.addView(style.text(name).apply {
+                gravity = Gravity.CENTER; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            }, FrameLayout.LayoutParams(-1, -1))
             style.click(cell) { savePositions(); pager.select(names.indexOf(name)) }
             tabs.addView(cell, LinearLayout.LayoutParams(0, -1, 1f))
             val list = newList(); val adapter = RoomAdapter(name); lists[name] = list; adapters[name] = adapter
@@ -251,12 +279,59 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
     private fun paintTabs() {
         tabs.setBackgroundColor(style.surface); tabs.invalidate()
         for (i in tabNames.indices) {
-            val cell = tabs.getChildAt(i) as FrameLayout; val selected = tabNames[i] == activeTab; val label = cell.getChildAt(0) as TextView
+            val cell = tabs.getChildAt(i) as FrameLayout; val label = cell.getChildAt(0) as TextView
             val count = (data["superChats"] as? List<*>)?.size ?: 0
             label.text = if (tabNames[i] == "SC" && count > 0) "SC($count)" else tabNames[i]
-            label.setTextColor(if (selected) style.primary else style.foreground)
-
         }
+        paintTabColors()
+    }
+    private fun paintTabColors() {
+        val settling = !pager.isDragging && pager.isSettling &&
+            tabMotionFrom != tabMotionTarget.toFloat() && tabMotionColors.size == tabs.childCount
+        val progress = if (settling)
+            ((tabPosition - tabMotionFrom) / (tabMotionTarget - tabMotionFrom)).coerceIn(0f, 1f) else 0f
+        for (i in 0 until tabs.childCount) {
+            val label = (tabs.getChildAt(i) as FrameLayout).getChildAt(0) as TextView
+            val color = if (settling) {
+                // 点击跨页只淡出原标签、淡入目标；中间标签不闪成选中状态。
+                androidx.core.graphics.ColorUtils.blendARGB(tabMotionColors[i],
+                    if (i == tabMotionTarget) style.primary else style.tabInactive, progress)
+            } else {
+                val selected = (1f - abs(tabPosition - i)).coerceIn(0f, 1f)
+                androidx.core.graphics.ColorUtils.blendARGB(style.tabInactive, style.primary, selected)
+            }
+            label.setTextColor(color)
+        }
+    }
+    private fun tabLabelBounds(index: Int): RectF {
+        if (tabs.childCount == 0 || tabs.width <= 0) return RectF()
+        val cell = tabs.getChildAt(index.coerceIn(0, tabs.childCount - 1)) as FrameLayout
+        val label = cell.getChildAt(0) as TextView
+        val labelWidth = label.paint.measureText(label.text.toString())
+            .coerceAtMost((cell.width - dp(16)).coerceAtLeast(0).toFloat())
+        val center = (cell.left + cell.right) / 2f
+        return RectF(center - labelWidth / 2f, 0f, center + labelWidth / 2f, 0f)
+    }
+    private fun tabIndicatorBounds(position: Float): RectF {
+        if (tabs.childCount == 0) return RectF()
+        val from: RectF; val to: RectF; val progress: Float; val movingRight: Boolean
+        if (!pager.isDragging && pager.isSettling && tabMotionFrom != tabMotionTarget.toFloat()) {
+            from = tabMotionStart; to = tabLabelBounds(tabMotionTarget)
+            progress = ((position - tabMotionFrom) / (tabMotionTarget - tabMotionFrom)).coerceIn(0f, 1f)
+            movingRight = tabMotionTarget > tabMotionFrom
+        } else {
+            val current = position.coerceIn(0f, (tabs.childCount - 1).toFloat())
+            val lower = kotlin.math.floor(current).toInt()
+            from = tabLabelBounds(lower); to = tabLabelBounds((lower + 1).coerceAtMost(tabs.childCount - 1))
+            progress = current - lower; movingRight = true
+        }
+        // 与首页 Material 3 label indicator 同源：前缘 sin，后缘 1-cos，先伸再收。
+        val accelerate = (1 - cos(progress * Math.PI / 2)).toFloat()
+        val decelerate = sin(progress * Math.PI / 2).toFloat()
+        val leftProgress = if (movingRight) accelerate else decelerate
+        val rightProgress = if (movingRight) decelerate else accelerate
+        return RectF(from.left + (to.left - from.left) * leftProgress, 0f,
+            from.right + (to.right - from.right) * rightProgress, 0f)
     }
     private fun listWithEmpty(list: ListView, message: String): FrameLayout {
         val content = FrameLayout(activity).apply { isClickable = true }
