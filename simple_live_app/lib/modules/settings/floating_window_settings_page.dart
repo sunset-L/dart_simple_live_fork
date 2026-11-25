@@ -134,7 +134,7 @@ class _FloatingWindowSettingsPageState extends State<FloatingWindowSettingsPage>
                 Obx(
                   () => SettingsSwitch(
                     title: "贴边压低音量",
-                    subtitle: "贴边后渐降至当前音量的一半，移出后恢复，不改变系统音量",
+                    subtitle: "贴边后渐降至播放器音量的30%，移出后恢复，不改变系统音量",
                     value: settings.floatingWindowDockVolumeEnable.value,
                     onChanged: settings.setFloatingWindowDockVolumeEnable,
                   ),

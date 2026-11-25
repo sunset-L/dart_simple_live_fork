@@ -153,7 +153,7 @@ class NativePlayerManager private constructor() {
     }
 
     private fun updateFloatingVolumeGain(animate: Boolean = true) {
-        val target = if (floatingDocked && floatingWindowDockVolumeEnabled) .5f else 1f
+        val target = if (floatingDocked && floatingWindowDockVolumeEnabled) .3f else 1f
         if (animate && target == floatingVolumeTarget) return
         floatingVolumeAnimator?.cancel()
         floatingVolumeAnimator = null
