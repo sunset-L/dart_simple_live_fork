@@ -235,6 +235,11 @@ class FloatingPlayerWindow(
     private var closeButton: ImageView? = null
     private var dockHandle: ImageView? = null
     private var dockedSide: DockSide? = null
+        set(value) {
+            if (field == value) return
+            field = value
+            manager.onFloatingDockStateChanged(isShowing && value != null)
+        }
     private var edgeHintColorAnimator: ValueAnimator? = null
     private var edgeHintColor = EDGE_DOCK_COLOR
     private var edgeHintTargetColor = EDGE_DOCK_COLOR
@@ -365,6 +370,7 @@ class FloatingPlayerWindow(
 
     fun show(width: Int, height: Int): Boolean {
         if (isShowing) {
+            manager.onFloatingDockStateChanged(dockedSide != null)
             return true
         }
         if (rootView != null) {
@@ -933,6 +939,7 @@ class FloatingPlayerWindow(
             rootView = container
             params = lp
             isShowing = true
+            manager.onFloatingDockStateChanged(dockedSide != null)
             updateDockHandle()
             // 提示条在小窗**之后**加，才能叠在它上面（见 hintLp 处的说明）
             try {
@@ -945,6 +952,7 @@ class FloatingPlayerWindow(
             true
         } catch (e: Exception) {
             Log.e(TAG, "addView failed: $e")
+            manager.onFloatingDockStateChanged(false, animate = false)
             releaseVideoSurface()
             rootView = null
             closeButton = null
@@ -2009,6 +2017,8 @@ class FloatingPlayerWindow(
     }
 
     fun hide(rememberPos: Boolean = true) {
+        // 离开小窗即撤销贴边增益，取消渐变，不能把低音量或动画留到播放页。
+        manager.onFloatingDockStateChanged(false, animate = false)
         mainHandler.removeCallbacks(screenChangeRunnable)
         mainHandler.removeCallbacks(hideCloseRunnable)
         mainHandler.removeCallbacks(showCloseRunnable)

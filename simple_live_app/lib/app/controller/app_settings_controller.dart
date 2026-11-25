@@ -50,6 +50,8 @@ class AppSettingsController extends GetxController {
         .clamp(0, 16);
     floatingWindowDockEnable.value = LocalStorageService.instance
         .getValue(LocalStorageService.kFloatingWindowDockEnable, true);
+    floatingWindowDockVolumeEnable.value = LocalStorageService.instance
+        .getValue(LocalStorageService.kFloatingWindowDockVolumeEnable, true);
 
     // 小窗弹幕默认关闭：小窗场景优先省电省流量，
     // 用户想在小窗看弹幕需要自己打开。
@@ -316,6 +318,14 @@ class AppSettingsController extends GetxController {
     syncFloatingWindowSettings();
   }
 
+  var floatingWindowDockVolumeEnable = true.obs;
+  void setFloatingWindowDockVolumeEnable(bool value) {
+    floatingWindowDockVolumeEnable.value = value;
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kFloatingWindowDockVolumeEnable, value);
+    syncFloatingWindowSettings();
+  }
+
   /// 原生小窗可跨 Flutter 引擎存活，启动、进入小窗和修改设置时均同步。
   Future<void> syncFloatingWindowSettings() async {
     if (!GetPlatform.isAndroid) return;
@@ -324,6 +334,7 @@ class AppSettingsController extends GetxController {
         enabled: floatingWindowEnable.value,
         cornerRadius: floatingWindowCornerRadius.value.toDouble(),
         dockEnabled: floatingWindowDockEnable.value,
+        dockVolumeEnabled: floatingWindowDockVolumeEnable.value,
       );
     } catch (e) {
       Log.logPrint(e);

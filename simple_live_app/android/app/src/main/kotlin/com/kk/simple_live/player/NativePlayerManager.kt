@@ -1,5 +1,8 @@
 package com.kk.simple_live.player
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
@@ -17,6 +20,7 @@ import android.provider.Settings
 import android.util.Log
 import android.view.OrientationEventListener
 import android.view.Surface
+import android.view.animation.AccelerateDecelerateInterpolator
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
@@ -131,6 +135,50 @@ class NativePlayerManager private constructor() {
     private var floatingWindowEnabled = true
     private var floatingWindowCornerRadius = 0f
     private var floatingWindowDockEnabled = true
+    private var floatingWindowDockVolumeEnabled = true
+    // 基准音量与贴边增益独立，避免反复贴边连续减半，也不触碰 AudioManager。
+    private var playbackVolume = 1f
+    private var floatingDocked = false
+    private var floatingVolumeGain = 1f
+    private var floatingVolumeTarget = 1f
+    private var floatingVolumeAnimator: ValueAnimator? = null
+
+    fun onFloatingDockStateChanged(docked: Boolean, animate: Boolean = true) {
+        floatingDocked = docked
+        updateFloatingVolumeGain(animate)
+    }
+
+    private fun applyPlaybackVolume() {
+        player?.volume = (playbackVolume * floatingVolumeGain).coerceIn(0f, 1f)
+    }
+
+    private fun updateFloatingVolumeGain(animate: Boolean = true) {
+        val target = if (floatingDocked && floatingWindowDockVolumeEnabled) .5f else 1f
+        if (animate && target == floatingVolumeTarget) return
+        floatingVolumeAnimator?.cancel()
+        floatingVolumeAnimator = null
+        floatingVolumeTarget = target
+        if (!animate || floatingVolumeGain == target) {
+            floatingVolumeGain = target
+            applyPlaybackVolume()
+            return
+        }
+        val animator = ValueAnimator.ofFloat(floatingVolumeGain, target).apply {
+            duration = 800L
+            interpolator = AccelerateDecelerateInterpolator()
+            addUpdateListener {
+                floatingVolumeGain = it.animatedValue as Float
+                applyPlaybackVolume()
+            }
+        }
+        floatingVolumeAnimator = animator
+        animator.addListener(object : AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: Animator) {
+                if (floatingVolumeAnimator === animator) floatingVolumeAnimator = null
+            }
+        })
+        animator.start()
+    }
 
     /** 全屏原生页面只响应稳定的横向姿态，退出方向由页面宿主管理。 */
     private var deviceOrientationListener: OrientationEventListener? = null
@@ -722,7 +770,8 @@ class NativePlayerManager private constructor() {
 
             "setVolume" -> {
                 val volume = (arguments as? Number)?.toFloat() ?: 1f
-                player?.volume = volume.coerceIn(0f, 1f)
+                playbackVolume = if (volume.isFinite()) volume.coerceIn(0f, 1f) else 1f
+                applyPlaybackVolume()
                 result.success(true)
             }
 
@@ -786,10 +835,12 @@ class NativePlayerManager private constructor() {
                 val radius = (args?.get("cornerRadius") as? Number)?.toFloat() ?: 0f
                 floatingWindowCornerRadius = if (radius.isFinite()) radius.coerceIn(0f, 16f) else 0f
                 floatingWindowDockEnabled = args?.get("dockEnabled") as? Boolean ?: true
+                floatingWindowDockVolumeEnabled = args?.get("dockVolumeEnabled") as? Boolean ?: true
                 floatingWindow?.updateSettings(
                     floatingWindowCornerRadius,
                     floatingWindowDockEnabled
                 )
+                updateFloatingVolumeGain()
                 // 关闭正在播放的小窗时由现有会话回到直播页，不销毁播放器或断流。
                 if (!floatingWindowEnabled && isFloating) onFloatingTap()
                 result.success(true)
@@ -1057,6 +1108,7 @@ class NativePlayerManager private constructor() {
         })
 
         player = exoPlayer
+        applyPlaybackVolume()
         boundSurface = null
         applySurface()
         return exoPlayer
@@ -1382,6 +1434,8 @@ class NativePlayerManager private constructor() {
     }
 
     fun release() {
+        onFloatingDockStateChanged(false, animate = false)
+        playbackVolume = 1f
         floatingReturnListener?.let { player?.removeListener(it) }
         floatingReturnListener = null
         returningFromFloating = false

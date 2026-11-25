@@ -55,6 +55,8 @@ class LocalStorageService extends GetxService {
   static const String kFloatingWindowCornerRadius =
       "FloatingWindowCornerRadius";
   static const String kFloatingWindowDockEnable = "FloatingWindowDockEnable";
+  static const String kFloatingWindowDockVolumeEnable =
+      "FloatingWindowDockVolumeEnable";
 
   /// 小窗显示弹幕
   ///

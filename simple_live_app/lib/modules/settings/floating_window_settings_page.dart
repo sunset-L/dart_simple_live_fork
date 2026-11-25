@@ -131,6 +131,15 @@ class _FloatingWindowSettingsPageState extends State<FloatingWindowSettingsPage>
                   ),
                 ),
                 AppStyle.divider,
+                Obx(
+                  () => SettingsSwitch(
+                    title: "贴边压低音量",
+                    subtitle: "贴边后渐降至当前音量的一半，移出后恢复，不改变系统音量",
+                    value: settings.floatingWindowDockVolumeEnable.value,
+                    onChanged: settings.setFloatingWindowDockVolumeEnable,
+                  ),
+                ),
+                AppStyle.divider,
                 SettingsAction(
                   title: "小窗弹幕设置",
                   onTap: () => Get.toNamed(RoutePath.kSettingsFloatingDanmu),

@@ -582,11 +582,13 @@ class NativePlayerBridge {
     required bool enabled,
     required double cornerRadius,
     required bool dockEnabled,
+    bool dockVolumeEnabled = true,
   }) async {
     await _method.invokeMethod("setFloatingWindowSettings", {
       "enabled": enabled,
       "cornerRadius": cornerRadius,
       "dockEnabled": dockEnabled,
+      "dockVolumeEnabled": dockVolumeEnabled,
     });
   }
 
