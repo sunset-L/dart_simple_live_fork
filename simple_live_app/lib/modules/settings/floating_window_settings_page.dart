@@ -132,11 +132,15 @@ class _FloatingWindowSettingsPageState extends State<FloatingWindowSettingsPage>
                 ),
                 AppStyle.divider,
                 Obx(
-                  () => SettingsSwitch(
+                  () => SettingsNumber(
                     title: "贴边压低音量",
-                    subtitle: "贴边后渐降至播放器音量的30%，移出后恢复，不改变系统音量",
-                    value: settings.floatingWindowDockVolumeEnable.value,
-                    onChanged: settings.setFloatingWindowDockVolumeEnable,
+                    subtitle: "贴边后保留的音量比例，100% 不压低，不改变系统音量",
+                    value: settings.floatingWindowDockVolumePercent.value,
+                    step: 10,
+                    min: 10,
+                    max: 100,
+                    unit: "%",
+                    onChanged: settings.setFloatingWindowDockVolumePercent,
                   ),
                 ),
                 AppStyle.divider,

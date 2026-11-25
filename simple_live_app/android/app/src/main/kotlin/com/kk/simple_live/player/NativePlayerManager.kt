@@ -135,8 +135,8 @@ class NativePlayerManager private constructor() {
     private var floatingWindowEnabled = true
     private var floatingWindowCornerRadius = 0f
     private var floatingWindowDockEnabled = true
-    private var floatingWindowDockVolumeEnabled = true
-    // 基准音量与贴边增益独立，避免反复贴边连续减半，也不触碰 AudioManager。
+    private var floatingWindowDockVolumePercent = 30
+    // 基准音量与贴边增益独立，避免反复贴边累积压低，也不触碰 AudioManager。
     private var playbackVolume = 1f
     private var floatingDocked = false
     private var floatingVolumeGain = 1f
@@ -153,7 +153,7 @@ class NativePlayerManager private constructor() {
     }
 
     private fun updateFloatingVolumeGain(animate: Boolean = true) {
-        val target = if (floatingDocked && floatingWindowDockVolumeEnabled) .3f else 1f
+        val target = if (floatingDocked) floatingWindowDockVolumePercent / 100f else 1f
         if (animate && target == floatingVolumeTarget) return
         floatingVolumeAnimator?.cancel()
         floatingVolumeAnimator = null
@@ -835,7 +835,10 @@ class NativePlayerManager private constructor() {
                 val radius = (args?.get("cornerRadius") as? Number)?.toFloat() ?: 0f
                 floatingWindowCornerRadius = if (radius.isFinite()) radius.coerceIn(0f, 16f) else 0f
                 floatingWindowDockEnabled = args?.get("dockEnabled") as? Boolean ?: true
-                floatingWindowDockVolumeEnabled = args?.get("dockVolumeEnabled") as? Boolean ?: true
+                // 百分比优先；兼容旧开关参数，100%时贴边也保持原音量。
+                floatingWindowDockVolumePercent = (args?.get("dockVolumePercent") as? Number)
+                    ?.toInt()?.coerceIn(10, 100)
+                    ?: if (args?.get("dockVolumeEnabled") == false) 100 else 30
                 floatingWindow?.updateSettings(
                     floatingWindowCornerRadius,
                     floatingWindowDockEnabled

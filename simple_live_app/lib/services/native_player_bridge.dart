@@ -583,12 +583,17 @@ class NativePlayerBridge {
     required double cornerRadius,
     required bool dockEnabled,
     bool dockVolumeEnabled = true,
+    int? dockVolumePercent,
   }) async {
+    // 兼容旧调用方的开关参数，明确百分比时以百分比为准。
+    final percent =
+        (dockVolumePercent ?? (dockVolumeEnabled ? 30 : 100)).clamp(10, 100);
     await _method.invokeMethod("setFloatingWindowSettings", {
       "enabled": enabled,
       "cornerRadius": cornerRadius,
       "dockEnabled": dockEnabled,
-      "dockVolumeEnabled": dockVolumeEnabled,
+      "dockVolumeEnabled": percent < 100,
+      "dockVolumePercent": percent,
     });
   }
 

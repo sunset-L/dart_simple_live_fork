@@ -55,8 +55,11 @@ class LocalStorageService extends GetxService {
   static const String kFloatingWindowCornerRadius =
       "FloatingWindowCornerRadius";
   static const String kFloatingWindowDockEnable = "FloatingWindowDockEnable";
+  // 旧开关键保留，用于迁移：开启=30%，关闭=100%。
   static const String kFloatingWindowDockVolumeEnable =
       "FloatingWindowDockVolumeEnable";
+  static const String kFloatingWindowDockVolumePercent =
+      "FloatingWindowDockVolumePercent";
 
   /// 小窗显示弹幕
   ///

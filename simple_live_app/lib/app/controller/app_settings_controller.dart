@@ -50,8 +50,20 @@ class AppSettingsController extends GetxController {
         .clamp(0, 16);
     floatingWindowDockEnable.value = LocalStorageService.instance
         .getValue(LocalStorageService.kFloatingWindowDockEnable, true);
-    floatingWindowDockVolumeEnable.value = LocalStorageService.instance
-        .getValue(LocalStorageService.kFloatingWindowDockVolumeEnable, true);
+    final savedDockVolume = LocalStorageService.instance.getValue<int?>(
+        LocalStorageService.kFloatingWindowDockVolumePercent, null);
+    // 优先读取百分比，首次升级保留旧开关关闭的含义，新用户默认30%。
+    final dockVolume = savedDockVolume ??
+        (LocalStorageService.instance.getValue(
+                LocalStorageService.kFloatingWindowDockVolumeEnable, true)
+            ? 30
+            : 100);
+    floatingWindowDockVolumePercent.value = dockVolume.clamp(10, 100);
+    if (savedDockVolume == null) {
+      LocalStorageService.instance.setValue(
+          LocalStorageService.kFloatingWindowDockVolumePercent,
+          floatingWindowDockVolumePercent.value);
+    }
 
     // 小窗弹幕默认关闭：小窗场景优先省电省流量，
     // 用户想在小窗看弹幕需要自己打开。
@@ -318,11 +330,12 @@ class AppSettingsController extends GetxController {
     syncFloatingWindowSettings();
   }
 
-  var floatingWindowDockVolumeEnable = true.obs;
-  void setFloatingWindowDockVolumeEnable(bool value) {
-    floatingWindowDockVolumeEnable.value = value;
-    LocalStorageService.instance
-        .setValue(LocalStorageService.kFloatingWindowDockVolumeEnable, value);
+  var floatingWindowDockVolumePercent = 30.obs;
+  void setFloatingWindowDockVolumePercent(int value) {
+    final percent = value.clamp(10, 100);
+    floatingWindowDockVolumePercent.value = percent;
+    LocalStorageService.instance.setValue(
+        LocalStorageService.kFloatingWindowDockVolumePercent, percent);
     syncFloatingWindowSettings();
   }
 
@@ -334,7 +347,7 @@ class AppSettingsController extends GetxController {
         enabled: floatingWindowEnable.value,
         cornerRadius: floatingWindowCornerRadius.value.toDouble(),
         dockEnabled: floatingWindowDockEnable.value,
-        dockVolumeEnabled: floatingWindowDockVolumeEnable.value,
+        dockVolumePercent: floatingWindowDockVolumePercent.value,
       );
     } catch (e) {
       Log.logPrint(e);
