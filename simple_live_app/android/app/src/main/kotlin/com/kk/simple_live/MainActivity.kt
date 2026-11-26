@@ -52,6 +52,9 @@ class MainActivity : FlutterActivity() {
                 "closePlayerPage" -> {
                     host().close(result)
                 }
+                "waitPlayerPageClosed" -> {
+                    playerHost?.waitUntilClosed(result) ?: result.success(null)
+                }
                 "dismissPlayerOverlay" -> result.success(playerHost?.dismissOverlay() == true)
                 "openPlayerPage" -> {
                     val data = call.arguments as? Map<*, *>

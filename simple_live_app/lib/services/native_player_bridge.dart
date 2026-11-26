@@ -304,6 +304,9 @@ class NativePlayerBridge {
     await _activity.invokeMethod<void>('closePlayerPage');
     // Surface 被恢复不等于 Dart 自己会有脏帧；主动提交当前返回路由的一帧。
     SchedulerBinding.instance.scheduleForcedFrame();
+    // 关闭请求先确认以便恢复 Flutter 出帧，再等原生推出结束。
+    // 上层 resetSystem 随后才释放解码器，避免同步 release 阻塞转场。
+    await _activity.invokeMethod<void>('waitPlayerPageClosed');
   }
 
   Future<void> setPlayerFullscreen(bool fullscreen, bool landscape) =>

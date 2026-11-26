@@ -206,7 +206,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
             !_recoveryStopped &&
             ((!detailLoaded.value && !_shouldAdoptStream) ||
                 (liveStatus.value && lineConnecting.value)),
-        'lineCount': playUrls.length,
+        'lineCount':
+            currentLineIndex >= 0 ? effectiveLineCount : playUrls.length,
         'lineIndex': playingLineIndex.value,
         'floatingEnabled': floatingEnabled,
         'superChatEnabled':
@@ -292,7 +293,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         'siteName': Sites.allSites[item.siteId]?.name ?? item.siteId,
         'siteLogo': Sites.allSites[item.siteId]?.logo ?? '',
         'status': status == null
-            ? '未知'
+            ? null
             : status
                 ? '直播中'
                 : '未开播',
@@ -732,8 +733,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       exitFull();
     }
     try {
+      // 先静音暂停，播放器由父类在原生推出结束后统一释放。
+      // 提前 release 会阻塞退出、丢失转场画面，并在 onClose 再释放一次。
+      await nativePlayer.pause();
       await nativePlayer.exitFloating();
-      await nativePlayer.release();
     } catch (e) {
       Log.logPrint(e);
     }
@@ -1471,19 +1474,23 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     final generation = _playbackGeneration;
     final revision = _sourceRevision;
     final index = currentLineIndex;
-    final expectedUrl = index >= 0 && index < playUrls.length
-        ? _effectivePlayUrl(playUrls[index])
-        : currentPlayUrl.value;
+    // 接管小窗后重新获取的线路地址可能已有新签名，不能拿新地址的完整
+    // 查询串与仍在播放的旧地址比较，否则画面正常却永远无法确认线路。
+    final expectedUrl = currentPlayUrl.value;
     if (index < 0 ||
+        index >= effectiveLineCount ||
         expectedUrl.isEmpty ||
-        expectedUrl != currentPlayUrl.value ||
-        _recoveryStopped) {
+        _recoveryStopped ||
+        (playUrls.isNotEmpty &&
+            _lineIdentity(playUrls[index]) != _lineIdentity(expectedUrl))) {
       return;
     }
     final actualUrl = await nativePlayer.getCurrentUrl();
     final playing = await nativePlayer.isPlaying();
     if (!_isPlaybackCurrent(generation) ||
         revision != _sourceRevision ||
+        index != currentLineIndex ||
+        expectedUrl != currentPlayUrl.value ||
         actualUrl != expectedUrl ||
         !playing) {
       return;

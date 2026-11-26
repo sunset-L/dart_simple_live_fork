@@ -13,6 +13,8 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.ImageButton
 import android.text.TextUtils
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
@@ -31,12 +33,14 @@ class NativePlayerView(
         scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
         visibility = GONE
     }
+    private var heldBitmap: android.graphics.Bitmap? = null
     fun holdFrame(bitmap: android.graphics.Bitmap?) {
+        heldBitmap = bitmap
         heldFrame.setImageBitmap(bitmap)
         heldFrame.visibility = if (bitmap == null) GONE else VISIBLE
     }
     fun captureFrame(): android.graphics.Bitmap? =
-        (video.videoSurfaceView as? android.view.TextureView)?.bitmap
+        heldBitmap ?: (video.videoSurfaceView as? android.view.TextureView)?.bitmap
     private val loading = NativePlayerLoading(activity).apply { visibility = GONE }
     private val danmaku = DanmakuOverlayView(activity)
     private val topBar = LinearLayout(activity).apply { visibility = GONE }
@@ -74,6 +78,7 @@ class NativePlayerView(
     private var gestureBrightness = 0.5f
     private var dragging = false
     private var gestureActive = false
+    private var topEdgeGestureBlocked = false
     private var gestureHeight = 0
     private var gestureOnVolume = false
     private var roomBrightness: Float? = null
@@ -399,10 +404,10 @@ class NativePlayerView(
             }
         })
 
-    private fun cancelGesture() {
+    private fun cancelGesture(force: Boolean = false) {
         tip.visibility = GONE
         // 构造时 setFullscreen 也会走到这里，此时还未创建 GestureDetector。
-        if (!gestureActive && !dragging) return
+        if (!force && !gestureActive && !dragging) return
         gestureActive = false; dragging = false
         val cancel = MotionEvent.obtain(0, 0, MotionEvent.ACTION_CANCEL, 0f, 0f, 0)
         detector.onTouchEvent(cancel); cancel.recycle()
@@ -418,6 +423,17 @@ class NativePlayerView(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            // 全屏顶部至少留出48dp，状态栏/刘海较高时再向下留16dp。
+            // 使用忽略可见性的状态栏高度，沉浸模式下也保留稳定的下拉入口。
+            val statusTop = ViewCompat.getRootWindowInsets(this)
+                ?.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.statusBars())?.top ?: 0
+            val blockedHeight = maxOf(dp(48), maxOf(statusTop, safeInsets[1]) + dp(16))
+            topEdgeGestureBlocked = fullscreen && event.y < blockedHeight
+            if (topEdgeGestureBlocked) cancelGesture(force = true)
+        }
+        // 按起点屏蔽整段触摸，移出区域也不接手；直接点击子控件仍正常响应。
+        if (topEdgeGestureBlocked) return true
         if (locked) return true
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {

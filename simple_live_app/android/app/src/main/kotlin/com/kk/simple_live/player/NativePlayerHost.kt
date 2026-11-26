@@ -30,6 +30,12 @@ class NativePlayerHost(
     private var exitListener: FlutterUiDisplayListener? = null
     private var background = false
     private var entryCover: android.widget.ImageView? = null
+    // 保留进房前的返回页快照，退出时直接复用，避免恢复 Surface 后再同步截图。
+    private var navigationBitmap: android.graphics.Bitmap? = null
+    private var exitAnimationFinished = false
+    private var exitFlutterReady = false
+    private val closeWaiters = mutableListOf<MethodChannel.Result>()
+    private var pendingPageData: Map<*, *>? = null
     private var navigationAnimator: ValueAnimator? = null
     private var navigationPreDraw: ViewTreeObserver.OnPreDrawListener? = null
 
@@ -47,11 +53,17 @@ class NativePlayerHost(
         navigationAnimator = null
         page?.translationX = 0f
         clearEntryCover()
+        val pending = pendingPageData
+        pendingPageData = null
+        if (exitListener == null && pending != null) page?.update(pending)
+    }
+
+    private fun finishExitIfReady() {
+        if (exitListener != null && exitAnimationFinished && exitFlutterReady) dispose()
     }
 
     private fun animateNavigation(roomPage: NativeLiveRoomPage, entering: Boolean) {
         val cover = entryCover
-        val flutterView = flutter
         val animator = ValueAnimator.ofFloat(0f, 1f).apply {
             duration = NativePlayerNavigationMotion.DURATION_MS
             // 使用原始时间分别计算主页面/底层页的 Cupertino 曲线，不做对称慢进慢出。
@@ -72,16 +84,18 @@ class NativePlayerHost(
                 // 不在 View 绘制遍历中移除层级；同时检查动画和页面归属。
                 content.post {
                     if (navigationAnimator !== animator || page !== roomPage) return@post
-                    finishNavigation()
-                    if (!entering) dispose()
+                    if (entering) finishNavigation()
+                    else {
+                        exitAnimationFinished = true
+                        finishExitIfReady()
+                    }
                 }
             }
         })
         val listener = object : ViewTreeObserver.OnPreDrawListener {
             override fun onPreDraw(): Boolean {
                 if (page !== roomPage || navigationAnimator !== animator) return true
-                if (content.width <= 0 || roomPage.isLayoutRequested ||
-                    (!entering && flutterView?.isLayoutRequested == true)) return true
+                if (content.width <= 0 || roomPage.isLayoutRequested) return true
                 content.viewTreeObserver.removeOnPreDrawListener(this)
                 navigationPreDraw = null
                 if (entering) roomPage.translationX = content.width.toFloat()
@@ -130,7 +144,11 @@ class NativePlayerHost(
         captureNavigationCover()
     }
     private fun captureNavigationCover() {
-        val bitmap = runCatching { renderer.bitmap }.getOrNull() ?: return
+        navigationBitmap = runCatching { renderer.bitmap }.getOrNull()
+        showNavigationCover()
+    }
+    private fun showNavigationCover() {
+        val bitmap = navigationBitmap ?: return
         entryCover = android.widget.ImageView(activity).apply {
             scaleType = android.widget.ImageView.ScaleType.FIT_XY
             setImageBitmap(bitmap)
@@ -140,7 +158,10 @@ class NativePlayerHost(
         }
     }
     fun cancelEntry() {
-        if (page == null) clearEntryCover()
+        if (page == null) {
+            clearEntryCover()
+            navigationBitmap = null
+        }
     }
     private fun clearEntryCover() {
         entryCover?.let { content.removeView(it); it.setImageDrawable(null) }
@@ -259,23 +280,28 @@ class NativePlayerHost(
         finishTransition()
         val flutterView = flutter
         val roomPage = page
-        if (roomPage == null || flutterView == null) { dispose(); result.success(null); return }
+        if (roomPage == null || flutterView == null || background) { dispose(); result.success(null); return }
         if (exitListener != null) { result.success(null); return }
         finishNavigation()
+        // 小窗交接已保留最后一帧，captureFrame 会复用它，避免重复读回纹理。
         roomPage.video.holdFrame(roomPage.video.captureFrame())
         roomPage.video.suspendPlaybackUi()
+        exitAnimationFinished = false
+        exitFlutterReady = false
+        showNavigationCover()
         val listener = object : FlutterUiDisplayListener {
             override fun onFlutterUiDisplayed() {
-                // 返回页真正出帧后才推出原生层，不能拿业务占位页作动画底层。
-                // result 已回 Dart，路由退出和强制提交帧不会等待本动画造成死锁。
+                // 快照负责推出期间的底层；真实返回页恢复与动画并行。
+                // 两者都完成后才撤掉覆盖层，避免未出帧时露出空白。
                 content.post {
                     if (exitListener !== this || page !== roomPage) return@post
                     renderer.removeIsDisplayingFlutterUiListener(this)
+                    exitFlutterReady = true
                     if (background) dispose()
                     else if (navigationAnimator == null) {
-                        captureNavigationCover()
+                        // 没有可复用快照时，等真实返回页出帧后直接作为底层。
                         animateNavigation(roomPage, entering = false)
-                    }
+                    } else finishExitIfReady()
                 }
             }
             override fun onFlutterUiNoLongerDisplayed() = Unit
@@ -285,14 +311,22 @@ class NativePlayerHost(
         onBars(false)
         flutterView.visibility = View.VISIBLE
         flutterView.requestLayout()
+        if (entryCover != null && !background) animateNavigation(roomPage, entering = false)
         result.success(null)
     }
+    fun waitUntilClosed(result: MethodChannel.Result) {
+        if (exitListener == null) result.success(null) else closeWaiters.add(result)
+    }
+
     fun onBackground() {
-        if (page == null || background || manager.isFloating) return
+        if (page == null) return
+        // 退出中退到后台时 Flutter 不一定再出帧；即使已经交接小窗，也要
+        // 结束原生页与关闭等待，不能把释放流程挂到下次回前台。
+        if (exitListener != null) { dispose(); return }
+        if (background || manager.isFloating) return
         background = true
         finishNavigation()
         finishTransition()
-        if (exitListener != null) { dispose(); return }
         page?.video?.suspendPlaybackUi()
         onAction("background", null)
     }
@@ -305,7 +339,11 @@ class NativePlayerHost(
 
     fun dismissOverlay(): Boolean = page?.dismissOverlay() == true
 
-    fun update(data: Map<*, *>) { page?.update(data) }
+    fun update(data: Map<*, *>) {
+        if (exitListener != null) return
+        // 推入期间合并频繁的房间/列表刷新，避免每帧重新布局整页。
+        if (navigationAnimator != null) pendingPageData = data else page?.update(data)
+    }
     fun replaceMessages(items: List<*>) { page?.clearMessages(); page?.addMessages(items) }
     fun addMessages(items: List<*>) { page?.addMessages(items) }
     fun addDanmaku(items: List<*>) { page?.video?.addDanmaku(items) }
@@ -317,7 +355,11 @@ class NativePlayerHost(
     }
 
     fun dispose() {
+        pendingPageData = null
         finishNavigation()
+        navigationBitmap = null
+        exitAnimationFinished = false
+        exitFlutterReady = false
         finishTransition()
         pendingFullscreen = null
         manager.onHoldFullscreenFrame = null
@@ -339,5 +381,10 @@ class NativePlayerHost(
         originalOrientation?.let { activity.requestedOrientation = it }
         originalOrientation = null
         onBars(false)
+        // 推出与返回页首帧都完成后，再允许 Dart 释放播放器，避免解码器
+        // 的同步销毁阻塞转场；若新页面已接管，Dart 会按会话所有权跳过释放。
+        val waiters = closeWaiters.toList()
+        closeWaiters.clear()
+        waiters.forEach { it.success(null) }
     }
 }

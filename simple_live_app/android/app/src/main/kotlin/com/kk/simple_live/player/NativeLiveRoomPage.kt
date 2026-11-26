@@ -233,6 +233,7 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
             followRefresh?.setRefreshing(values["followRefreshing"] == true)
             sheetRefresh?.invoke()
         }
+        sheetSelectionRefresh?.invoke()
         requestLayout()
     }
     private fun buildTabs(names: List<String>) {
@@ -506,7 +507,7 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
     }
     private fun clearSheet() {
         durationDialog?.dismiss(); durationDialog = null
-        sheetRefresh = null; roomPager?.dispose(); roomPager = null; sheet?.dispose(); sheet = null
+        sheetRefresh = null; sheetSelectionRefresh = null; roomPager?.dispose(); roomPager = null; sheet?.dispose(); sheet = null
         val result = sheetResult; sheetResult = null; result?.success(null)
     }
     fun dismissOverlay(): Boolean {
@@ -604,7 +605,8 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
         }
         popup.show()
     }
-    private fun choose(title: String, items: List<String>, selected: Int, clicked: (Int) -> Unit) {
+    private var sheetSelectionRefresh: (() -> Unit)? = null
+    private fun choose(title: String, items: List<String>, selected: Int, selectionKey: String? = null, clicked: (Int) -> Unit) {
         val popup = beginSheet(title, side = false, heightPx = (dp(56 + items.size.coerceIn(1, 4) * 48) + safeBottom).coerceAtMost((height * .85).toInt()))
         val box = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
         if (items.isEmpty()) box.addView(style.text("暂无$title，请刷新直播间").apply { setPadding(dp(16), dp(16), dp(16), dp(16)) })
@@ -613,16 +615,32 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
             row.addView(ImageView(activity).apply { setImageDrawable(NativeIcons.drawable(if (index == selected) "radioChecked" else "radioUnchecked", if (index == selected) style.primary else style.foreground)) }, LinearLayout.LayoutParams(dp(24), dp(24)).apply { rightMargin = dp(24) })
             row.addView(style.text(label, 16f), LinearLayout.LayoutParams(0, -2, 1f))
             row.accessibilityDelegate = object : View.AccessibilityDelegate() {
-                override fun onInitializeAccessibilityNodeInfo(host: View, info: android.view.accessibility.AccessibilityNodeInfo) { super.onInitializeAccessibilityNodeInfo(host, info); info.className = "android.widget.RadioButton"; info.isCheckable = true; info.isChecked = index == selected; info.text = label }
+                override fun onInitializeAccessibilityNodeInfo(host: View, info: android.view.accessibility.AccessibilityNodeInfo) { super.onInitializeAccessibilityNodeInfo(host, info); info.className = "android.widget.RadioButton"; info.isCheckable = true; info.isChecked = host.isSelected; info.text = label }
             }
             style.click(row) { clicked(index); popup.dismiss() }; box.addView(row, LinearLayout.LayoutParams(-1, dp(48)))
+        }
+        if (selectionKey != null) {
+            var shownSelection = selected
+            sheetSelectionRefresh = {
+                val current = (data[selectionKey] as? Number)?.toInt() ?: -1
+                if (current != shownSelection) {
+                    shownSelection = current
+                    for (index in items.indices) {
+                        val row = box.getChildAt(index) as LinearLayout
+                        row.isSelected = index == current
+                        (row.getChildAt(0) as ImageView).setImageDrawable(NativeIcons.drawable(
+                            if (row.isSelected) "radioChecked" else "radioUnchecked",
+                            if (row.isSelected) style.primary else style.foreground))
+                    }
+                }
+            }
         }
         popup.panel.addView(ScrollView(activity).apply { isVerticalScrollBarEnabled = false; addView(box) }, LinearLayout.LayoutParams(-1, 0, 1f))
     }
     fun showPanel(kind: String) { when (kind) {
         "rooms" -> showRooms(); "more" -> showMore()
-        "quality" -> choose("切换清晰度", (data["qualities"] as? List<*>)?.map { it.toString() } ?: emptyList(), (data["qualityIndex"] as? Number)?.toInt() ?: -1) { onAction("quality", it) }
-        "line" -> choose("切换线路", List(((data["lineCount"] as? Number)?.toInt() ?: 0).coerceIn(0, 100)) { "线路 ${it + 1}" }, (data["lineIndex"] as? Number)?.toInt() ?: -1) { onAction("line", it) }
+        "quality" -> choose("切换清晰度", (data["qualities"] as? List<*>)?.map { it.toString() } ?: emptyList(), (data["qualityIndex"] as? Number)?.toInt() ?: -1, selectionKey = "qualityIndex") { onAction("quality", it) }
+        "line" -> choose("切换线路", List(((data["lineCount"] as? Number)?.toInt() ?: 0).coerceIn(0, 100)) { "线路 ${it + 1}" }, (data["lineIndex"] as? Number)?.toInt() ?: -1, selectionKey = "lineIndex") { onAction("line", it) }
         "metrics" -> video.showMetrics()
         "settings", "playerSettings" -> choose("画面尺寸", listOf("适应", "拉伸", "铺满", "16:9", "4:3"), (data["scaleMode"] as? Number)?.toInt() ?: 0) { onAction("scale", it) }
         "danmakuSettings" -> showDanmakuSettings()
