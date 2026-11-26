@@ -215,7 +215,8 @@ class NativePlayerView(
         lineChip.visibility = if (value) VISIBLE else GONE
         qualityChip.maxWidth = dp(if (value) 132 else 88)
         setSafeInsets(safeInsets[0], safeInsets[1], safeInsets[2], safeInsets[3])
-        if (!value) { clearSuperChat(); stopMetrics() }
+        if (!value) { danmaku.clearAll(); clearSuperChat(); stopMetrics() }
+        else updateSuperChat(data)
     }
 
     fun showMore() = onShowPanel("more")
@@ -253,26 +254,35 @@ class NativePlayerView(
     }
 
     fun update(values: Map<*, *>) {
-        val optionsChanged = listOf("fontSize", "fontWeight", "opacity", "area", "duration", "topMargin", "bottomMargin").any { data[it] != values[it] }
+        val previous = data
+        fun changed(vararg keys: String) = previous.isEmpty() || keys.any { previous[it] != values[it] }
+        val optionsChanged = changed("fontSize", "fontWeight", "opacity", "area", "duration", "topMargin", "bottomMargin")
         data = values
-        title.text = "${values["title"] ?: "直播间"} - ${values["userName"] ?: ""}"
-        subtitle.text = values["popularity"]?.toString() ?: "0"
-        durationText.text = values["durationText"]?.toString() ?: "00:00:00"
-        val selected = (values["qualityIndex"] as? Number)?.toInt() ?: -1
-        val qualities = values["qualities"] as? List<*> ?: emptyList<Any>()
-        qualityChip.text = qualities.getOrNull(selected)?.toString() ?: "画质"
-        val line = (values["lineIndex"] as? Number)?.toInt() ?: -1
-        lineChip.text = if (line >= 0) "线路 ${line + 1}" else "线路"
-        status.text = (values["status"]?.toString() ?: "").takeUnless { it.startsWith("正在加载") } ?: ""
-        status.visibility = if (status.text.isEmpty()) GONE else VISIBLE
-        updateLoading()
-        floating?.visibility = if (values["floatingEnabled"] == true) VISIBLE else GONE
-        danmakuButton.setImageDrawable(NativeIcons.drawable(if (values["danmakuEnabled"] == true) "danmaku" else "danmakuOff"))
-        val mode = (values["scaleMode"] as? Number)?.toInt() ?: 0
-        video.setScaleMode(mode)
-        danmaku.visibility = if (fullscreen && values["danmakuEnabled"] == true) VISIBLE else GONE
-        if (danmaku.visibility == GONE) danmaku.clearAll()
-        updateSuperChat(values)
+        if (changed("title", "userName")) title.text = "${values["title"] ?: "直播间"} - ${values["userName"] ?: ""}"
+        if (changed("popularity")) subtitle.text = values["popularity"]?.toString() ?: "0"
+        if (changed("durationText")) durationText.text = values["durationText"]?.toString() ?: "00:00:00"
+        if (changed("qualityIndex", "qualities")) {
+            val selected = (values["qualityIndex"] as? Number)?.toInt() ?: -1
+            val qualities = values["qualities"] as? List<*> ?: emptyList<Any>()
+            qualityChip.text = qualities.getOrNull(selected)?.toString() ?: "画质"
+        }
+        if (changed("lineIndex")) {
+            val line = (values["lineIndex"] as? Number)?.toInt() ?: -1
+            lineChip.text = if (line >= 0) "线路 ${line + 1}" else "线路"
+        }
+        if (changed("status")) {
+            status.text = (values["status"]?.toString() ?: "").takeUnless { it.startsWith("正在加载") } ?: ""
+            status.visibility = if (status.text.isEmpty()) GONE else VISIBLE
+        }
+        if (changed("status", "preparingPlayback", "playbackSuspended")) updateLoading()
+        if (changed("floatingEnabled")) floating?.visibility = if (values["floatingEnabled"] == true) VISIBLE else GONE
+        if (changed("danmakuEnabled")) {
+            danmakuButton.setImageDrawable(NativeIcons.drawable(if (values["danmakuEnabled"] == true) "danmaku" else "danmakuOff"))
+            danmaku.visibility = if (fullscreen && values["danmakuEnabled"] == true) VISIBLE else GONE
+            if (danmaku.visibility == GONE) danmaku.clearAll()
+        }
+        if (changed("scaleMode")) video.setScaleMode((values["scaleMode"] as? Number)?.toInt() ?: 0)
+        if (changed("superChats", "superChatEnabled", "playbackSuspended")) updateSuperChat(values)
         if (optionsChanged) danmaku.applyOptions(
             number("fontSize", 16f), number("fontWeight", 4f).toInt(),
             number("opacity", 1f), number("area", .8f), number("duration", 10f).toInt(),
@@ -286,7 +296,7 @@ class NativePlayerView(
     }
 
     private fun updateSuperChat(values: Map<*, *>) {
-        if (!fullscreen || values["superChatEnabled"] != true) {
+        if (!fullscreen || values["superChatEnabled"] != true || values["playbackSuspended"] == true) {
             clearSuperChat()
             return
         }

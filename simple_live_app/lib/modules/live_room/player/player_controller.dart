@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:collection/collection.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/controller/base_controller.dart';
@@ -183,6 +184,11 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   Worker? _nativeSettingsWorker;
   Future<void>? _pageReady;
   bool _nativePageOpen = false;
+  Timer? _nativePageSyncTimer;
+  bool _nativePageSyncing = false;
+  bool _nativePageDirty = false;
+  Map<String, dynamic> _lastNativePageData = {};
+  static const _pageDataEquality = DeepCollectionEquality();
 
   Map<String, dynamic> get nativePageData {
     final s = AppSettingsController.instance;
@@ -202,12 +208,42 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   }
 
   void syncNativePage() {
-    if (_systemDisposed || !_nativePageOpen) {
-      return;
-    }
-    unawaited(nativePlayer.updatePlayerPage(nativePageData).catchError((e) {
+    if (_systemDisposed || !_nativePageOpen || !_ownsNativePage) return;
+    _nativePageDirty = true;
+    if (_nativePageSyncing || _nativePageSyncTimer != null) return;
+    // 原生页展示时 Flutter Surface 已隐藏，用定时器合并同批状态更新。
+    _nativePageSyncTimer = Timer(const Duration(milliseconds: 16), () {
+      _nativePageSyncTimer = null;
+      unawaited(_flushNativePage());
+    });
+  }
+
+  Future<void> _flushNativePage() async {
+    if (_systemDisposed || !_nativePageOpen || !_ownsNativePage) return;
+    _nativePageDirty = false;
+    final values = nativePageData;
+    final changes = <String, dynamic>{
+      for (final entry in values.entries)
+        if (!_lastNativePageData.containsKey(entry.key) ||
+            !_pageDataEquality.equals(
+                _lastNativePageData[entry.key], entry.value))
+          entry.key: entry.value,
+      for (final key in _lastNativePageData.keys)
+        if (!values.containsKey(key)) key: null,
+    };
+    if (changes.isEmpty) return;
+    _nativePageSyncing = true;
+    try {
+      await nativePlayer.updatePlayerPage(changes);
+      if (!_systemDisposed && _ownsNativePage) _lastNativePageData = values;
+    } catch (e) {
+      // 下次业务状态变化时重发完整状态，不在失败后循环重试。
+      _lastNativePageData = {};
       Log.logPrint(e);
-    }));
+    } finally {
+      _nativePageSyncing = false;
+      if (_nativePageDirty) syncNativePage();
+    }
   }
 
   void onNativePageAction(String action, dynamic value) {
@@ -273,12 +309,13 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
       s.playershowSuperChat,
     ], (_) => syncNativePage());
     // 竖屏业务页不再跟随窗口旋转；方向只在完整原生全屏页可见时切换。
-    _pageReady = nativePlayer.openPlayerPage(nativePageData);
+    _lastNativePageData = nativePageData;
+    _pageReady = nativePlayer.openPlayerPage(_lastNativePageData);
     try {
       await _pageReady;
-      _nativePageOpen = !_systemDisposed;
+      _nativePageOpen = !_systemDisposed && _ownsNativePage;
       syncNativePage();
-      if (!_systemDisposed && s.autoFullScreen.value) await enterFullScreen();
+      if (_nativePageOpen && s.autoFullScreen.value) await enterFullScreen();
     } catch (e) {
       Log.logPrint(e);
       if (!_systemDisposed) onNativePageOpenFailed(e);
@@ -287,6 +324,10 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
 
   Future resetSystem() async {
     _systemDisposed = true;
+    _nativePageSyncTimer?.cancel();
+    _nativePageSyncTimer = null;
+    _nativePageDirty = false;
+    _lastNativePageData = {};
     _nativeSettingsWorker?.dispose();
     fullScreenTransitioning.value = false;
     if (!_ownsNativePage) return;

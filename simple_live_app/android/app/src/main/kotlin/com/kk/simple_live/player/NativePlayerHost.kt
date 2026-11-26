@@ -5,7 +5,6 @@ import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.app.Activity
 import android.content.pm.ActivityInfo
-import android.graphics.RectF
 import android.view.View
 import android.view.ViewTreeObserver
 import android.view.animation.LinearInterpolator
@@ -35,6 +34,7 @@ class NativePlayerHost(
     private var exitAnimationFinished = false
     private var exitFlutterReady = false
     private val closeWaiters = mutableListOf<MethodChannel.Result>()
+    private var pageData: Map<*, *> = emptyMap<Any, Any>()
     private var pendingPageData: Map<*, *>? = null
     private var navigationAnimator: ValueAnimator? = null
     private var navigationPreDraw: ViewTreeObserver.OnPreDrawListener? = null
@@ -109,35 +109,6 @@ class NativePlayerHost(
         content.invalidate()
     }
     private var pendingFullscreen: Pair<Boolean, Boolean>? = null
-    private var originalRotationAnimation: Int? = null
-    // 当前先比较 Android/OEM 默认窗口旋转。自定义 320ms 单画面方案保留，暂不启用。
-    private val useCustomFullscreenTransition = false
-    private var transition: NativePlayerTransition? = null
-    private var transitionResult: MethodChannel.Result? = null
-    private var transitionPreDraw: ViewTreeObserver.OnPreDrawListener? = null
-    private val transitionTimeout = Runnable {
-        // 方向请求被系统拒绝或页面离开时兜底，不能永久遮屏或锁住 Dart 切换状态。
-        if (transitionResult != null) finishTransition("切换方向未完成，请重试")
-    }
-    private fun videoRect(roomPage: NativeLiveRoomPage): RectF {
-        val surface = roomPage.video.video.videoSurfaceView ?: roomPage.video
-        val location = IntArray(2); val hostLocation = IntArray(2)
-        surface.getLocationInWindow(location); content.getLocationInWindow(hostLocation)
-        return RectF((location[0] - hostLocation[0]).toFloat(), (location[1] - hostLocation[1]).toFloat(),
-            (location[0] - hostLocation[0] + surface.width).toFloat(),
-            (location[1] - hostLocation[1] + surface.height).toFloat())
-    }
-    private fun finishTransition(error: String? = null) {
-        content.removeCallbacks(transitionTimeout)
-        transitionPreDraw?.let { if (content.viewTreeObserver.isAlive) content.viewTreeObserver.removeOnPreDrawListener(it) }
-        transitionPreDraw = null
-        transition?.let { it.dispose(); content.removeView(it) }; transition = null
-        page?.alpha = 1f
-        page?.setPageActionsTransitioning(false)
-        val result = transitionResult; transitionResult = null
-        if (error == null) result?.success(null) else result?.error("PLAYER_TRANSITION", error, null)
-    }
-
     /** 小窗点击发生于路由跳转前，保留当前 Flutter 页面，挡住业务占位页的空白帧。 */
     fun prepareEntry() {
         if (page != null || entryCover != null) return
@@ -188,18 +159,12 @@ class NativePlayerHost(
         }
         prepareEntry()
         originalOrientation = activity.requestedOrientation
-        if (useCustomFullscreenTransition) {
-            originalRotationAnimation = activity.window.attributes.rotationAnimation
-            activity.window.attributes = activity.window.attributes.apply {
-                // 自定义方案才设置窗口交接方式，默认模式不修改 Android 的旋转动画属性。
-                rotationAnimation = android.view.WindowManager.LayoutParams.ROTATION_ANIMATION_SEAMLESS
-            }
-        }
         manager.clearFullscreenOrientation()
         activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         flutter = flutterView
         val roomPage = NativeLiveRoomPage(activity, player, onAction)
         page = roomPage
+        pageData = data
         roomPage.update(data)
         roomPage.video.holdFrame(manager.captureFloatingFrame())
         manager.onHoldFullscreenFrame = { bitmap -> roomPage.video.holdFrame(bitmap) }
@@ -222,50 +187,14 @@ class NativePlayerHost(
         val roomPage = page
         if (roomPage == null) { result.error("PLAYER_UNAVAILABLE", "播放页已关闭", null); return }
         if (exitListener != null) { result.success(null); return }
-        if (transitionResult != null) { result.error("PLAYER_TRANSITION", "正在切换播放方向", null); return }
         finishNavigation()
         val targetLandscape = value && landscape
         val currentLandscape = activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
-        if (!useCustomFullscreenTransition) {
-            // 仅请求目标布局、系统栏和方向；不截帧、不盖过渡层、不设置动画或隐藏操作栏。
-            pendingFullscreen = if (currentLandscape != targetLandscape) Pair(value, targetLandscape) else null
-            if (pendingFullscreen == null) roomPage.setFullscreen(value)
-            onBars(value)
-            requestFullscreenOrientation(value, landscape)
-            result.success(null)
-            return
-        }
-        val captured = roomPage.video.captureFrame()
-        transitionResult = result
-        val animation = NativePlayerTransition(activity, captured, videoRect(roomPage),
-            content.width, content.height, content.display?.rotation ?: 0, value)
-        transition = animation
-        content.addView(animation, FrameLayout.LayoutParams(-1, -1))
-        roomPage.alpha = 0f
-        roomPage.setPageActionsTransitioning(true)
         pendingFullscreen = if (currentLandscape != targetLandscape) Pair(value, targetLandscape) else null
         if (pendingFullscreen == null) roomPage.setFullscreen(value)
-        // 等目标方向和真实布局，不用定时延迟猜测 Android 配置变更何时结束。
-        val listener = object : ViewTreeObserver.OnPreDrawListener {
-            override fun onPreDraw(): Boolean {
-                if (page !== roomPage || transition !== animation) return true
-                val isLandscape = content.width > content.height
-                if (pendingFullscreen != null || isLandscape != targetLandscape || roomPage.isLayoutRequested) return true
-                content.viewTreeObserver.removeOnPreDrawListener(this)
-                transitionPreDraw = null
-                if (!value) roomPage.alpha = 1f
-                animation.start(videoRect(roomPage), content.display?.rotation ?: 0) {
-                    // Animator 回调不在绘制遍历中，下一帧一起移除遮罩与显示控件。
-                    finishTransition()
-                }
-                return true
-            }
-        }
-        transitionPreDraw = listener
-        content.viewTreeObserver.addOnPreDrawListener(listener)
-        content.postDelayed(transitionTimeout, 1800L)
         onBars(value)
         requestFullscreenOrientation(value, landscape)
+        result.success(null)
     }
 
     private fun requestFullscreenOrientation(value: Boolean, landscape: Boolean) {
@@ -277,7 +206,6 @@ class NativePlayerHost(
     }
 
     fun close(result: MethodChannel.Result) {
-        finishTransition()
         val flutterView = flutter
         val roomPage = page
         if (roomPage == null || flutterView == null || background) { dispose(); result.success(null); return }
@@ -326,7 +254,6 @@ class NativePlayerHost(
         if (background || manager.isFloating) return
         background = true
         finishNavigation()
-        finishTransition()
         page?.video?.suspendPlaybackUi()
         onAction("background", null)
     }
@@ -340,9 +267,13 @@ class NativePlayerHost(
     fun dismissOverlay(): Boolean = page?.dismissOverlay() == true
 
     fun update(data: Map<*, *>) {
-        if (exitListener != null) return
+        if (page == null || exitListener != null) return
+        // Dart 仅发送变化字段，在这里合并为页面组件使用的完整状态。
+        val merged = HashMap<Any?, Any?>(pageData).apply { putAll(data) }
+        if (merged == pageData) return
+        pageData = merged
         // 推入期间合并频繁的房间/列表刷新，避免每帧重新布局整页。
-        if (navigationAnimator != null) pendingPageData = data else page?.update(data)
+        if (navigationAnimator != null) pendingPageData = merged else page?.update(merged)
     }
     fun replaceMessages(items: List<*>) { page?.clearMessages(); page?.addMessages(items) }
     fun addMessages(items: List<*>) { page?.addMessages(items) }
@@ -355,18 +286,14 @@ class NativePlayerHost(
     }
 
     fun dispose() {
+        pageData = emptyMap<Any, Any>()
         pendingPageData = null
         finishNavigation()
         navigationBitmap = null
         exitAnimationFinished = false
         exitFlutterReady = false
-        finishTransition()
         pendingFullscreen = null
         manager.onHoldFullscreenFrame = null
-        originalRotationAnimation?.let { animation ->
-            activity.window.attributes = activity.window.attributes.apply { rotationAnimation = animation }
-        }
-        originalRotationAnimation = null
         exitListener?.let { renderer.removeIsDisplayingFlutterUiListener(it) }; exitListener = null
         page?.let {
             manager.detachFullscreenView(it.video.video)

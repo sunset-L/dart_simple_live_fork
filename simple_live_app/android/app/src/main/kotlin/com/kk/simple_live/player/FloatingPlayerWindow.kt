@@ -432,7 +432,8 @@ class FloatingPlayerWindow(
                 val surface = Surface(texture)
                 outputSurface = surface
                 videoSurface = surface
-                manager.attachFloatingSurface(surface)
+                manager.attachFloatingSurface(surface,
+                    (heldFrame.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap)
             }
 
             override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {

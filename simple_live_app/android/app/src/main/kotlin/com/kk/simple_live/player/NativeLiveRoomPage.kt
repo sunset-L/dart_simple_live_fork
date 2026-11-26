@@ -66,13 +66,6 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
         settleInterpolator = android.view.animation.PathInterpolator(.25f, .1f, .25f, 1f)
     }
     private val bottom = LinearLayout(activity)
-    /** 关注/刷新/分享只在方向切换结束、最终布局稳定后出现，不参与视频缩放。 */
-    fun setPageActionsTransitioning(value: Boolean) {
-        bottom.alpha = if (value) 0f else 1f
-        bottom.isEnabled = !value
-        // 动画遮罩只保留一幅视频。保留真实 TextureView/输出，但落位前不露出第二幅画面。
-        video.alpha = if (value) 0f else 1f
-    }
     private val follow = NativePlayerAction(activity)
     private val latest = TextView(activity)
     private val chat = ArrayList<Map<*, *>>()
@@ -202,39 +195,65 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
         requestLayout(); ViewCompat.requestApplyInsets(this)
     }
     fun update(values: Map<*, *>) {
-        val changedRoom = data["roomKey"] != values["roomKey"]
-        val listChanged = listOf("title", "userName", "roomKey", "chatSize", "chatGap", "chatBubble", "superChatEnabled", "follows", "history", "superChats", "dark", "primaryColor", "autoExitEnabled", "autoExitCountdown", "followRefreshing", "historyRefreshing").any { data[it] != values[it] }
-        data = values; style = NativePlayerStyle(activity, data)
+        val previous = data
+        fun changed(vararg keys: String) = previous.isEmpty() || keys.any { previous[it] != values[it] }
+        val changedRoom = changed("roomKey")
+        val themeChanged = changed("dark", "backgroundColor", "cardColor", "sheetColor", "foregroundColor",
+            "primaryColor", "tabInactiveColor", "tabDividerColor", "dialogColor", "inputColor",
+            "primaryContainerColor", "onPrimaryContainerColor", "errorColor")
+        data = values
+        if (themeChanged) style = NativePlayerStyle(activity, data)
         if (changedRoom) { chat.clear(); unreadChat.clear(); positions.clear(); autoScroll = true }
-        setBackgroundColor(style.background); header.setBackgroundColor(style.background); profile.setBackgroundColor(style.surface)
-        title.text = values["title"]?.toString() ?: "直播间"; title.setTextColor(style.foreground)
-        back.setImageDrawable(NativeIcons.drawable("back", style.foreground)); menu.setImageDrawable(NativeIcons.drawable("more", style.foreground))
-        user.text = values["userName"]?.toString() ?: "直播间"; user.setTextColor(style.foreground)
-        siteName.text = values["siteName"]?.toString() ?: ""; loadLogo(siteLogo, values["siteLogo"]?.toString() ?: "")
-        popularity.text = values["popularity"]?.toString() ?: "0"; popularity.setTextColor(style.foreground)
-        NativeAvatar.load(avatar, values["avatar"]?.toString() ?: "")
-        for (i in 0 until bottom.childCount) (bottom.getChildAt(i) as NativePlayerAction).setColor(style.primary)
-        follow.bind(if (values["followed"] == true) "followFilled" else "follow",
-            if (values["followed"] == true) "取消关注" else "关注", style.primary)
-        bottom.setBackgroundColor(style.surface)
-        latest.setTextColor(style.primary)
-        latest.background = NativeIcons.background(
-            androidx.core.graphics.ColorUtils.blendARGB(style.surface, style.primary, .16f), dp(18).toFloat()).apply {
-            setStroke(dp(1), (style.primary and 0x00FFFFFF) or 0x88000000.toInt())
+        if (themeChanged) {
+            setBackgroundColor(style.background); header.setBackgroundColor(style.background); profile.setBackgroundColor(style.surface)
+            title.setTextColor(style.foreground); user.setTextColor(style.foreground); popularity.setTextColor(style.foreground)
+            back.setImageDrawable(NativeIcons.drawable("back", style.foreground)); menu.setImageDrawable(NativeIcons.drawable("more", style.foreground))
+            for (i in 0 until bottom.childCount) (bottom.getChildAt(i) as NativePlayerAction).setColor(style.primary)
+            bottom.setBackgroundColor(style.surface)
+            latest.setTextColor(style.primary)
+            latest.background = NativeIcons.background(
+                androidx.core.graphics.ColorUtils.blendARGB(style.surface, style.primary, .16f), dp(18).toFloat()).apply {
+                setStroke(dp(1), (style.primary and 0x00FFFFFF) or 0x88000000.toInt())
+            }
+            val latestArrow = NativeIcons.drawable("arrowDown", style.primary).apply { setBounds(0, 0, dp(18), dp(18)) }
+            latest.setCompoundDrawables(latestArrow, null, null, null)
+            latest.compoundDrawablePadding = dp(4); latest.setPadding(dp(10), 0, dp(10), 0)
         }
-        val latestArrow = NativeIcons.drawable("arrowDown", style.primary).apply { setBounds(0, 0, dp(18), dp(18)) }
-        latest.setCompoundDrawables(latestArrow, null, null, null)
-        latest.compoundDrawablePadding = dp(4); latest.setPadding(dp(10), 0, dp(10), 0)
+        if (changed("title")) title.text = values["title"]?.toString() ?: "直播间"
+        if (changed("userName")) user.text = values["userName"]?.toString() ?: "直播间"
+        if (changed("siteName")) siteName.text = values["siteName"]?.toString() ?: ""
+        if (changed("siteLogo")) loadLogo(siteLogo, values["siteLogo"]?.toString() ?: "")
+        if (changed("popularity")) popularity.text = values["popularity"]?.toString() ?: "0"
+        if (changed("avatar")) NativeAvatar.load(avatar, values["avatar"]?.toString() ?: "")
+        if (themeChanged || changed("followed")) follow.bind(
+            if (values["followed"] == true) "followFilled" else "follow",
+            if (values["followed"] == true) "取消关注" else "关注", style.primary)
         video.update(values)
         val names = listOf("聊天") + (if (values["hasSC"] == true) listOf("SC") else emptyList()) + listOf("关注", "设置")
         if (names != tabNames) buildTabs(names)
-        if (!fullscreen && listChanged) { adapters[activeTab]?.refresh(); paintTabs() }
-        if (listChanged) {
-            followRefresh?.setRefreshing(values["followRefreshing"] == true)
-            sheetRefresh?.invoke()
+        if (!fullscreen) {
+            for ((name, adapter) in adapters) {
+                val listChanged = themeChanged || when (name) {
+                    "聊天" -> changed("roomKey", "title", "userName", "siteName", "siteLogo", "chatSize", "chatGap", "chatBubble")
+                    "SC" -> changed("superChats", "chatSize", "chatGap", "chatBubble")
+                    "关注" -> changed("follows", "roomKey")
+                    else -> changed("autoExitEnabled", "chatSize", "chatGap", "chatBubble", "superChatEnabled")
+                }
+                if (listChanged) adapter.refresh()
+            }
+            if (changed("autoExitCountdown")) {
+                lists["设置"]?.findViewWithTag<TextView>("autoExitCountdown")?.text = autoExitCountdownText()
+            }
+            if (themeChanged || changed("superChats")) paintTabs()
         }
-        sheetSelectionRefresh?.invoke()
-        requestLayout()
+        if (changed("followRefreshing")) followRefresh?.setRefreshing(values["followRefreshing"] == true)
+        if (themeChanged || changed("follows", "history", "roomKey", "followRefreshing", "historyRefreshing")) sheetRefresh?.invoke()
+        if (changed("lineIndex", "qualityIndex")) sheetSelectionRefresh?.invoke()
+        if (changed("aspectRatio", "hasSC")) requestLayout()
+    }
+    private fun autoExitCountdownText(): String {
+        val seconds = (data["autoExitCountdown"] as? Number)?.toInt() ?: 0
+        return "${seconds / 60}分钟${seconds % 60}秒后自动关闭"
     }
     private fun buildTabs(names: List<String>) {
         pager.dispose(); pager.removeAllViews(); tabs.removeAllViews(); followRefresh = null; lists.clear(); adapters.clear(); tabNames = names
@@ -464,8 +483,7 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
         val action = item["action"]?.toString() ?: ""
         if (action == "heading") return style.text(item["text"].toString(), 14f).apply { setPadding(dp(24), dp(16), dp(12), dp(12)); setTypeface(null, Typeface.BOLD) }
         if (action == "countdown") {
-            val seconds = (data["autoExitCountdown"] as? Number)?.toInt() ?: 0
-            return style.text("${seconds / 60}分钟${seconds % 60}秒后自动关闭", 16f).apply { setPadding(dp(24), dp(8), dp(12), dp(8)); val icon = NativeIcons.drawable("timer", style.foreground); icon.setBounds(0, 0, dp(24), dp(24)); setCompoundDrawables(icon, null, null, null); compoundDrawablePadding = dp(12) }
+            return style.text(autoExitCountdownText(), 16f).apply { tag = "autoExitCountdown"; setPadding(dp(24), dp(8), dp(12), dp(8)); val icon = NativeIcons.drawable("timer", style.foreground); icon.setBounds(0, 0, dp(24), dp(24)); setCompoundDrawables(icon, null, null, null); compoundDrawablePadding = dp(12) }
         }
         val entries = if (action == "chatGroup") listOf("文字大小" to "chatSize", "上下间隔" to "chatGap", "气泡样式" to "chatBubble", "播放器中显示SC" to "showSC")
             else listOf("关键词屏蔽" to "shieldSettings", "弹幕设置" to "danmakuSettings", "定时关闭" to "autoExitSettings", "画面尺寸" to "playerSettings")

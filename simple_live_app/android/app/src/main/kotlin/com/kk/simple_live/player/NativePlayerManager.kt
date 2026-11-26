@@ -1467,9 +1467,9 @@ class NativePlayerManager private constructor() {
 
     // ---------------------------------------------------------------- Surface 调度
 
-    fun attachFloatingSurface(surface: Surface) {
+    fun attachFloatingSurface(surface: Surface, preservedFrame: android.graphics.Bitmap? = null) {
         floatingSurface = surface
-        applySurface()
+        applySurface(preservedFrame)
     }
 
     fun detachFloatingSurface(surface: Surface) {
@@ -1485,7 +1485,7 @@ class NativePlayerManager private constructor() {
      * 优先级：悬浮窗 > 原生播放页。
      * 这样「页面销毁」或「小窗关闭」任一事件发生时，输出都会自动落到另一方。
      */
-    private fun applySurface() {
+    private fun applySurface(preservedFrame: android.graphics.Bitmap? = null) {
         val exoPlayer = player ?: return
         val fullscreen = fullscreenView
         if (fullscreen != null && (floatingSurface == null || returningFromFloating)) {
@@ -1494,7 +1494,7 @@ class NativePlayerManager private constructor() {
             return
         }
         if (fullscreen?.player != null) {
-            onHoldFullscreenFrame?.invoke(captureFullscreenFrame())
+            onHoldFullscreenFrame?.invoke(preservedFrame ?: captureFullscreenFrame())
             fullscreen.player = null
         }
         val target = floatingSurface
