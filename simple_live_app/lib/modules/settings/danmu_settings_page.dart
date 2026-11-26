@@ -1,13 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:canvas_danmaku/canvas_danmaku.dart';
 import 'package:simple_live_app/app/app_style.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/widgets/settings/settings_action.dart';
 import 'package:simple_live_app/widgets/settings/settings_card.dart';
 import 'package:simple_live_app/widgets/settings/settings_number.dart';
-import 'package:simple_live_app/widgets/settings/settings_switch.dart';
 
 class DanmuSettingsPage extends StatelessWidget {
   const DanmuSettingsPage({Key? key}) : super(key: key);
@@ -30,7 +28,6 @@ class DanmuSettingsPage extends StatelessWidget {
 
 class DanmuSettingsView extends GetView<AppSettingsController> {
   final Function()? onTapDanmuShield;
-  final DanmakuController? danmakuController;
 
   /// 是否显示「小窗弹幕设置」入口
   ///
@@ -39,7 +36,6 @@ class DanmuSettingsView extends GetView<AppSettingsController> {
   final bool showFloatingEntry;
   const DanmuSettingsView({
     this.onTapDanmuShield,
-    this.danmakuController,
     this.showFloatingEntry = true,
     super.key,
   });
@@ -67,42 +63,7 @@ class DanmuSettingsView extends GetView<AppSettingsController> {
                     () => Get.toNamed(RoutePath.kSettingsDanmuShield),
               ),
               AppStyle.divider,
-              // 福袋/抽奖弹幕是平台活动刷屏的主要来源，且没有独立的消息类型，
-              // 只能按内容识别。开关只有一份：播放器与小窗共用同一条规则。
-              Obx(
-                () => SettingsSwitch(
-                  title: "屏蔽福袋弹幕",
-                  subtitle: "过滤福袋、抽奖、中奖播报等弹幕，对小窗弹幕同样生效",
-                  value: controller.danmuShieldFortuneBag.value,
-                  onChanged: (e) {
-                    controller.setDanmuShieldFortuneBag(e);
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: AppStyle.edgeInsetsA12.copyWith(top: 24),
-          child: Text(
-            "弹幕设置",
-            style: Get.textTheme.titleSmall,
-          ),
-        ),
-        SettingsCard(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Obx(
-                () => SettingsSwitch(
-                  title: "默认开关",
-                  value: controller.danmuEnable.value,
-                  onChanged: (e) {
-                    controller.setDanmuEnable(e);
-                  },
-                ),
-              ),
-              AppStyle.divider,
+
               // 小窗弹幕与播放器弹幕是两套独立配置：
               // 小窗画面小、轨道少，同一套参数必然有一边难用，所以单独一页。
               // 在播放器的「弹幕配置」面板里不显示这个入口——
@@ -125,9 +86,6 @@ class DanmuSettingsView extends GetView<AppSettingsController> {
                   unit: "%",
                   onChanged: (e) {
                     controller.setDanmuArea(e / 100.0);
-                    updateDanmuOption(
-                      danmakuController?.option.copyWith(area: e / 100.0),
-                    );
                   },
                 ),
               ),
@@ -142,9 +100,6 @@ class DanmuSettingsView extends GetView<AppSettingsController> {
                   unit: "%",
                   onChanged: (e) {
                     controller.setDanmuOpacity(e / 100.0);
-                    updateDanmuOption(
-                      danmakuController?.option.copyWith(opacity: e / 100.0),
-                    );
                   },
                 ),
               ),
@@ -157,10 +112,6 @@ class DanmuSettingsView extends GetView<AppSettingsController> {
                   max: 48,
                   onChanged: (e) {
                     controller.setDanmuSize(e.toDouble());
-                    updateDanmuOption(
-                      danmakuController?.option
-                          .copyWith(fontSize: e.toDouble()),
-                    );
                   },
                 ),
               ),
@@ -186,11 +137,6 @@ class DanmuSettingsView extends GetView<AppSettingsController> {
                       .toString(),
                   onChanged: (e) {
                     controller.setDanmuFontWeight(e);
-                    updateDanmuOption(
-                      danmakuController?.option.copyWith(
-                        fontWeight: e,
-                      ),
-                    );
                   },
                 ),
               ),
@@ -204,9 +150,6 @@ class DanmuSettingsView extends GetView<AppSettingsController> {
                   max: 20,
                   onChanged: (e) {
                     controller.setDanmuSpeed(e.toDouble());
-                    updateDanmuOption(
-                      danmakuController?.option.copyWith(duration: e.toInt()),
-                    );
                   },
                 ),
               ),
@@ -243,10 +186,5 @@ class DanmuSettingsView extends GetView<AppSettingsController> {
         ),
       ],
     );
-  }
-
-  void updateDanmuOption(DanmakuOption? option) {
-    if (danmakuController == null || option == null) return;
-    danmakuController!.updateOption(option);
   }
 }

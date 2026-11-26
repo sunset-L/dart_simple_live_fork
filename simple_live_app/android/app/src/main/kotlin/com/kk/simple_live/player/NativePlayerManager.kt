@@ -1,5 +1,8 @@
 package com.kk.simple_live.player
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
@@ -17,7 +20,7 @@ import android.provider.Settings
 import android.util.Log
 import android.view.OrientationEventListener
 import android.view.Surface
-import android.view.ViewTreeObserver
+import android.view.animation.AccelerateDecelerateInterpolator
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
@@ -30,35 +33,18 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.ui.PlayerView
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
-import io.flutter.view.TextureRegistry
 
 /**
- * 全局唯一的原生播放器。
- *
- * 架构要点：
- * 1. 全应用只有一个 ExoPlayer 实例，直播页与悬浮窗共用同一条网络流与解码器。
- * 2. 页内画面走 Flutter 外部纹理（SurfaceTexture），悬浮窗走自己窗口里的 TextureView。
- * 3. 输出目标由 [applySurface] 按「悬浮窗 > 页内纹理」的优先级自动决定，
- *    所以「页面 → 小窗」「小窗 → 页面」只是换输出，不重新取流、不重建播放器。
- *
- * 【为什么页内不用 PlatformView + SurfaceView】
- * 引擎的 PlatformViewsController 把 SurfaceView 列为不支持 TLHC 的类型，
- * 会强制回退到 Hybrid Composition。而 HC 是把平台视图当作 Android 子 View
- * 叠在 Flutter 内容之上——弹幕和播放控件会被视频整个盖住。
- * 同时 HC 创建时要走 FlutterView.convertToImageView()，代价很高，
- * 正是「进直播页卡 1-2 秒」的来源。
- *
- * 【为什么用 createSurfaceTexture 而不是 createSurfaceProducer】
- * SurfaceProducer.setSize() 只是把 createNewReader 置位，下次 getSurface()
- * 会返回新的 ImageReader 的 Surface 并关掉旧的，旧 Surface 立刻失效；
- * 若播放器还绑在旧 Surface 上，画面就会变灰（只有声音）。
- * SurfaceTexture 的 Surface 句柄从创建到释放始终有效，不存在这个坑。
+ * 全局唯一播放器。竖屏与全屏复用同一张原生 PlayerView，小窗使用自己的 TextureView。
+ * 视频不进入 Flutter 合成：横竖屏只由 Android 布局改变播放器区域。
+ * 输出仅在完整播放页与小窗之间交接，不重建播放器、解码器或网络流。
  */
 class NativePlayerManager private constructor() {
 
@@ -106,20 +92,33 @@ class NativePlayerManager private constructor() {
     private var pendingFloatingTap = false
 
     private var player: ExoPlayer? = null
+    private var fullscreenView: PlayerView? = null
+    var onPrepareFloatingReturn: (() -> Unit)? = null
+    var onHoldFullscreenFrame: ((android.graphics.Bitmap?) -> Unit)? = null
+    private var returningFromFloating = false
+    private var floatingReturnListener: Player.Listener? = null
+    fun captureFloatingFrame(): android.graphics.Bitmap? = floatingWindow?.captureFrame()
+    fun captureFullscreenFrame(): android.graphics.Bitmap? =
+        (fullscreenView?.videoSurfaceView as? android.view.TextureView)?.bitmap
 
-    /** 页内画面输出（Flutter 外部纹理） */
-    private var pageSurface: Surface? = null
 
-    /** Flutter 外部纹理条目，由 createSurfaceTexture 创建 */
-    private var textureEntry: TextureRegistry.SurfaceTextureEntry? = null
+    fun attachFullscreenView(view: PlayerView) {
+        fullscreenView = view
+        applySurface()
+    }
 
-    /** 当前纹理 id，供 Dart 侧 Texture 控件使用 */
-    private var textureId: Long = -1L
+    fun detachFullscreenView(view: PlayerView) {
+        if (fullscreenView !== view) return
+        view.player = null
+        fullscreenView = null
+        floatingReturnListener?.let { player?.removeListener(it) }
+        floatingReturnListener = null
+        returningFromFloating = false
+        boundSurface = null
+        applySurface()
+    }
 
-    /** 是否已经出现过首帧（用于隐藏 loading 遮罩） */
-    private var frameConsumed = false
-    @Volatile
-    private var frameProduced = false
+    fun fullscreenPlayer(): ExoPlayer? = ensurePlayer()
 
     /** 悬浮窗画面输出 */
     private var floatingSurface: Surface? = null
@@ -136,13 +135,52 @@ class NativePlayerManager private constructor() {
     private var floatingWindowEnabled = true
     private var floatingWindowCornerRadius = 0f
     private var floatingWindowDockEnabled = true
+    private var floatingWindowDockVolumePercent = 30
+    // 基准音量与贴边增益独立，避免反复贴边累积压低，也不触碰 AudioManager。
+    private var playbackVolume = 1f
+    private var floatingDocked = false
+    private var floatingVolumeGain = 1f
+    private var floatingVolumeTarget = 1f
+    private var floatingVolumeAnimator: ValueAnimator? = null
 
-    /** 方向策略和实际窗口方向分别保存；恢复策略本身不保证厂商小窗转回原方向。 */
-    private var orientationBeforeFullscreen: Int? = null
-    private var windowOrientationBeforeFullscreen: Int? = null
-    private var windowRotationBeforeFullscreen: Int? = null
-    private var orientationRestoreListener: ViewTreeObserver.OnPreDrawListener? = null
-    private var orientationRestoreTimeout: Runnable? = null
+    fun onFloatingDockStateChanged(docked: Boolean, animate: Boolean = true) {
+        floatingDocked = docked
+        updateFloatingVolumeGain(animate)
+    }
+
+    private fun applyPlaybackVolume() {
+        player?.volume = (playbackVolume * floatingVolumeGain).coerceIn(0f, 1f)
+    }
+
+    private fun updateFloatingVolumeGain(animate: Boolean = true) {
+        val target = if (floatingDocked) floatingWindowDockVolumePercent / 100f else 1f
+        if (animate && target == floatingVolumeTarget) return
+        floatingVolumeAnimator?.cancel()
+        floatingVolumeAnimator = null
+        floatingVolumeTarget = target
+        if (!animate || floatingVolumeGain == target) {
+            floatingVolumeGain = target
+            applyPlaybackVolume()
+            return
+        }
+        val animator = ValueAnimator.ofFloat(floatingVolumeGain, target).apply {
+            duration = 800L
+            interpolator = AccelerateDecelerateInterpolator()
+            addUpdateListener {
+                floatingVolumeGain = it.animatedValue as Float
+                applyPlaybackVolume()
+            }
+        }
+        floatingVolumeAnimator = animator
+        animator.addListener(object : AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: Animator) {
+                if (floatingVolumeAnimator === animator) floatingVolumeAnimator = null
+            }
+        })
+        animator.start()
+    }
+
+    /** 全屏原生页面只响应稳定的横向姿态，退出方向由页面宿主管理。 */
     private var deviceOrientationListener: OrientationEventListener? = null
     private var deviceOrientation: Int = OrientationEventListener.ORIENTATION_UNKNOWN
     private var naturalLandscapeDisplay = false
@@ -177,6 +215,7 @@ class NativePlayerManager private constructor() {
      * 之后不会置空。用它判断会让「离开自动暂停」在用户进过一次小窗后永久失效。
      */
     private var pausedByHome = false
+    private var stoppedPageInBackground = false
 
     /** 最近一次已知的**显示**视频尺寸（只由 VideoSize 回调写入） */
     private var videoWidth = 0
@@ -274,7 +313,6 @@ class NativePlayerManager private constructor() {
             deviceOrientationListener?.disable()
             deviceOrientationListener = null
             stopLandscapeOrientationChanges()
-            clearOrientationRestore()
         }
         this.activity = activity
         this.appContext = activity.applicationContext
@@ -282,23 +320,8 @@ class NativePlayerManager private constructor() {
             initDeviceOrientationListener(activity)
         }
 
-        // 引擎是否换了。
-        //
-        // 关键场景：直播页返回进小窗后，一路返回退到桌面，
-        // Activity 与 FlutterEngine 会被系统销毁，但系统级悬浮窗和
-        // 本单例里的 ExoPlayer 都还活着。再次进入 App 时 Flutter 会新建引擎，
-        // 此时必须重建 Channel 与纹理——
-        // 旧 Channel 绑在已销毁引擎的 messenger 上，新 Dart 侧调用它不会有任何反应；
-        // 旧纹理属于旧引擎，新引擎拿到那个 id 只会渲染出黑屏。
-        val engineChanged = attachedEngine !== engine
-        if (engineChanged) {
-            Log.d(TAG, "detect new FlutterEngine, rebind channels & texture")
-            // 旧引擎的纹理已经随引擎一起失效，直接丢弃引用，不要再去 release 它
-            textureEntry = null
-            textureId = -1L
-            pageSurface = null
-            boundSurface = null
-            frameConsumed = false
+        // 引擎重建只重绑业务通道，不改变原生播放页/小窗的视频输出。
+        if (attachedEngine !== engine) {
             methodChannel = null
             eventSink = null
             attachedEngine = engine
@@ -345,12 +368,6 @@ class NativePlayerManager private constructor() {
             }
         }
 
-        // 纹理在引擎重建后需要重新创建，并重新绑定到播放器，
-        // 否则页内播放只会有声音、没有画面。
-        if (engineChanged && player != null) {
-            initTexture()
-        }
-
         // 注意：这里不做任何「关闭悬浮窗」的清理。
         // 悬浮窗代表正在进行的播放，Activity 重建不应该把它关掉。
     }
@@ -372,10 +389,12 @@ class NativePlayerManager private constructor() {
      * pendingFloatingTap，等新引擎的 Dart 侧订阅时补发。
      */
     fun detachActivity() {
+        onPrepareFloatingReturn = null
+        onHoldFullscreenFrame = null
+        fullscreenView?.let { detachFullscreenView(it) }
         deviceOrientationListener?.disable()
         deviceOrientationListener = null
         stopLandscapeOrientationChanges()
-        clearOrientationRestore()
         activity = null
     }
 
@@ -405,11 +424,18 @@ class NativePlayerManager private constructor() {
      *
      * 来电、锁屏、按 Home 键、按最近任务键都会走到这里，一律暂停。
      *
-     * 【纹理不在这里清】
-     * [clearTexture] 会复位首帧状态，回来时必须等下一帧才撤掉加载层。
-     * 后台暂停保留当前帧和首帧状态，回前台后可立刻显示已有画面。
+     * 后台暂停不清原生视频输出，回前台后直接恢复。
      */
     fun onBackground() {
+        // 完整播放页退到后台必须停网络/解码，不受旧的“按 Home 暂停”选项影响。
+        if (fullscreenView != null && !isFloatingVisible() && !isFloating) {
+            if (!stoppedPageInBackground) {
+                stoppedPageInBackground = true
+                stop()
+                Log.d(TAG, "player page suspended: stream stopped")
+            }
+            return
+        }
         if (!pauseOnHome) {
             return
         }
@@ -436,6 +462,11 @@ class NativePlayerManager private constructor() {
      * 早点让播放器重新拉流，画面能更早回来。
      */
     fun onUserReturn() {
+        if (stoppedPageInBackground) {
+            // Dart 重新读取房间及最新地址；不能直接重播可能过期的旧地址。
+            stoppedPageInBackground = false
+            return
+        }
         if (!pausedByHome) {
             return
         }
@@ -460,27 +491,7 @@ class NativePlayerManager private constructor() {
         return act.resources.configuration.orientation
     }
 
-    private fun clearOrientationRestore() {
-        orientationRestoreListener?.let { listener ->
-            activity?.window?.decorView?.viewTreeObserver?.let { observer ->
-                if (observer.isAlive) observer.removeOnPreDrawListener(listener)
-            }
-        }
-        orientationRestoreTimeout?.let { mainHandler.removeCallbacks(it) }
-        orientationRestoreListener = null
-        orientationRestoreTimeout = null
-        orientationBeforeFullscreen = null
-        windowOrientationBeforeFullscreen = null
-        windowRotationBeforeFullscreen = null
-    }
-
-    private fun finishOrientationRestore(act: Activity) {
-        val requested = orientationBeforeFullscreen ?: return
-        clearOrientationRestore()
-        if (activity === act && act.requestedOrientation != requested) {
-            act.requestedOrientation = requested
-        }
-    }
+    fun clearFullscreenOrientation() { stopLandscapeOrientationChanges() }
 
     private fun stopLandscapeOrientationChanges() {
         landscapeFullscreen = false
@@ -562,144 +573,34 @@ class NativePlayerManager private constructor() {
         return if (rotation == reverseRotation) reverse else normal
     }
 
-    /**
-     * 点击全屏和物理旋转分别处理。只请求明确的方向，旋转动画由系统负责。
-     *
-     * @param mode
-     *  - "landscape" 明确指定初始横屏方向，之后仅在有效横向姿态稳定时翻向。
-     *  - "portrait"  竖屏内容全屏时锁定竖屏，不响应左右横屏姿态。
-     *  - "auto"      非全屏 / 退出播放器：恢复进入全屏前的方向策略。
-     *                先恢复竖屏播放页，再恢复策略，避免厂商小窗保留全屏横向尺寸。
-     *  - "restore"   恢复并固定竖屏播放页，退出动画结束后再调用 auto。
-     */
+    /** 原生页面的横向姿态稳定后翻向；退出/离房的方向恢复由 NativePlayerHost 单独负责。 */
     fun setScreenOrientation(mode: String?) {
         val act = activity ?: return
-        if (mode == "landscape" || mode == "portrait") {
-            cancelPendingLandscapeChange()
-            val requested = orientationBeforeFullscreen
-            val savedWindowOrientation = windowOrientationBeforeFullscreen
-            val savedWindowRotation = windowRotationBeforeFullscreen
-            clearOrientationRestore()
-            if (requested == null) {
-                orientationBeforeFullscreen = act.requestedOrientation
-                windowOrientationBeforeFullscreen = Configuration.ORIENTATION_PORTRAIT
-                windowRotationBeforeFullscreen =
-                    if (windowOrientation(act) == Configuration.ORIENTATION_PORTRAIT) {
-                        act.window.decorView.display?.rotation
-                    } else null
-            } else {
-                orientationBeforeFullscreen = requested
-                windowOrientationBeforeFullscreen = savedWindowOrientation
-                windowRotationBeforeFullscreen = savedWindowRotation
-            }
-            landscapeFullscreen = mode == "landscape"
-            orientationChangeAllowedAt = SystemClock.uptimeMillis() + 600L
-            act.requestedOrientation = if (landscapeFullscreen) {
-                landscapeOrientationForDevice(deviceOrientation)
-                    ?: if (windowOrientation(act) == Configuration.ORIENTATION_LANDSCAPE) {
-                        orientationForWindow(
-                            Configuration.ORIENTATION_LANDSCAPE,
-                            act.window.decorView.display?.rotation
-                        )
-                    } else ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-            } else {
-                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            }
-            return
-        }
-        stopLandscapeOrientationChanges()
-        // 系统横屏全屏没有请求过方向；点击退出时仍需回到唯一的竖屏页面布局。
-        if (mode == "restore" && windowOrientationBeforeFullscreen == null) {
-            orientationBeforeFullscreen = act.requestedOrientation
-            windowOrientationBeforeFullscreen = Configuration.ORIENTATION_PORTRAIT
-            windowRotationBeforeFullscreen = null
-        }
-        val target = windowOrientationBeforeFullscreen ?: return
-        val requestedTarget = orientationForWindow(target, windowRotationBeforeFullscreen)
-        if (mode == "restore") {
-            act.requestedOrientation = requestedTarget
-            return
-        }
-        if (orientationRestoreListener != null) return
-        if (windowOrientation(act) == target) {
-            finishOrientationRestore(act)
-            return
-        }
-        val view = act.window.decorView
-        val listener = ViewTreeObserver.OnPreDrawListener {
-            if (activity === act && windowOrientation(act) == target) {
-                val pendingRestore = orientationRestoreListener
-                // 下一帧再还原策略，先让 Flutter 收到恢复后的窗口尺寸。
-                view.post {
-                    if (activity === act &&
-                        pendingRestore != null &&
-                        orientationRestoreListener === pendingRestore
-                    ) {
-                        finishOrientationRestore(act)
-                    }
-                }
-            }
-            true
-        }
-        orientationRestoreListener = listener
-        view.viewTreeObserver.addOnPreDrawListener(listener)
-        // 系统可以忽略方向请求，不能因此永久锁住用户后续的旋转。
-        orientationRestoreTimeout = Runnable {
-            if (activity === act) finishOrientationRestore(act)
-        }.also { mainHandler.postDelayed(it, 2000L) }
-        act.requestedOrientation = requestedTarget
-        Log.d(TAG, "restore window orientation: $target")
+        cancelPendingLandscapeChange()
+        landscapeFullscreen = mode == "landscape"
+        orientationChangeAllowedAt = SystemClock.uptimeMillis() + 600L
+        act.requestedOrientation = if (landscapeFullscreen) {
+            landscapeOrientationForDevice(deviceOrientation)
+                ?: if (windowOrientation(act) == Configuration.ORIENTATION_LANDSCAPE) {
+                    orientationForWindow(Configuration.ORIENTATION_LANDSCAPE, act.window.decorView.display?.rotation)
+                } else ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        } else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
     }
 
     /** 引擎已销毁：把所有与引擎绑定的引用清空 */
     fun detachEngine() {
-        // ⚠️ 先解绑视频输出，再丢引用。
-        //
-        // 之前这里只是把 pageSurface/boundSurface 置 null，**没有**通知播放器解绑。
-        // 后果：引擎销毁时它的 SurfaceTexture 在 native 层被释放，Surface 失效，
-        // 但 ExoPlayer 的渲染线程还在往这个已失效的 Surface 上 queueBuffer，
-        // 触发 native crash（SIGSEGV）——这就是「小窗回到 App 偶现闪退」的根因，
-        // 因为它在 Java 层抓不到异常，只会看到进程直接没了。
-        //
-        // clearVideoSurface 必须在主线程调用，cleanUpFlutterEngine 本身就在主线程，
-        // 所以这里同步执行即可。
-        try {
-            player?.let { p ->
-                if (boundSurface != null) {
-                    p.clearVideoSurface()
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "clearVideoSurface in detachEngine failed: $e")
-        }
-        boundSurface = null
-
+        // 播放页由宿主解绑，小窗输出不属于 FlutterEngine，不能在此清掉。
+        methodChannel?.setMethodCallHandler(null)
         methodChannel = null
         eventSink = null
         engine = null
         attachedEngine = null
-        // 纹理属于旧引擎，随引擎一起失效，直接丢弃引用，不要再去 release
-        // （release 会去碰已销毁引擎的对象，同样可能崩）
-        textureEntry = null
-        textureId = -1L
-        pageSurface = null
-        frameConsumed = false
     }
 
     // ---------------------------------------------------------------- Channel
 
     private fun handleMethodCall(method: String, arguments: Any?, result: MethodChannel.Result) {
         when (method) {
-            // 创建 Flutter 外部纹理，返回纹理 id 给 Dart 的 Texture 控件
-            "initTexture" -> {
-                result.success(initTexture())
-            }
-
-            "releaseTexture" -> {
-                releaseTexture()
-                result.success(true)
-            }
-
             "open" -> {
                 val args = arguments as? Map<*, *>
                 if (args == null) {
@@ -869,7 +770,8 @@ class NativePlayerManager private constructor() {
 
             "setVolume" -> {
                 val volume = (arguments as? Number)?.toFloat() ?: 1f
-                player?.volume = volume.coerceIn(0f, 1f)
+                playbackVolume = if (volume.isFinite()) volume.coerceIn(0f, 1f) else 1f
+                applyPlaybackVolume()
                 result.success(true)
             }
 
@@ -887,20 +789,6 @@ class NativePlayerManager private constructor() {
             }
 
             "isPlaying" -> result.success(player?.isPlaying == true)
-
-            // 是否已经有画面帧。
-            //
-            // 页面接管小窗播放器时用它决定要不要继续盖 loading。
-            // 注意：这个分支曾被误删，Dart 侧 hasRenderedFrame() 会静默拿到
-            // notImplemented，导致 _syncFirstFrameState() 恒为 false，
-            // 表现为「从后台/小窗回到播放页一直转圈」。
-            "hasRenderedFrame" -> result.success(frameConsumed)
-
-            // 复位首帧标记，加载层持续遮住旧帧，直到新流输出并消费画面。
-            "clearTexture" -> {
-                clearTexture()
-                result.success(true)
-            }
 
             // 当前正在播放的地址（播放信息面板展示、排障用）
             "getCurrentUrl" -> result.success(currentUrl)
@@ -939,31 +827,7 @@ class NativePlayerManager private constructor() {
             }
 
             // 主动读一次播放参数（面板刚打开、或事件还没到时用）
-            "getPlaybackMetrics" -> {
-                reloadMetricsFromTracks()
-                val bitrate =
-                    if (measuredBitrate > 0) measuredBitrate else declaredBitrate.toLong()
-                val frameRate =
-                    if (measuredFrameRate > 0f) measuredFrameRate else declaredFrameRate
-                result.success(
-                    mapOf(
-                        // 面板展示的是**编码**尺寸，和显示尺寸分开存，
-                        // 避免 1920×1088 这种宏块对齐值污染布局用的字段。
-                        "width" to metricsWidth,
-                        "height" to metricsHeight,
-                        "aspectRatio" to videoAspect,
-                        "videoBitrate" to bitrate,
-                        "frameRate" to frameRate,
-                        "videoCodec" to videoCodec,
-                        "audioCodec" to audioCodec,
-                        "audioChannels" to audioChannels,
-                        "audioSampleRate" to audioSampleRate,
-                        "bitrateMeasured" to (measuredBitrate > 0),
-                        "frameRateMeasured" to (measuredFrameRate > 0f),
-                        "url" to (currentUrl ?: ""),
-                    )
-                )
-            }
+            "getPlaybackMetrics" -> result.success(readPlaybackMetrics())
 
             "setFloatingWindowSettings" -> {
                 val args = arguments as? Map<*, *>
@@ -971,10 +835,15 @@ class NativePlayerManager private constructor() {
                 val radius = (args?.get("cornerRadius") as? Number)?.toFloat() ?: 0f
                 floatingWindowCornerRadius = if (radius.isFinite()) radius.coerceIn(0f, 16f) else 0f
                 floatingWindowDockEnabled = args?.get("dockEnabled") as? Boolean ?: true
+                // 百分比优先；兼容旧开关参数，100%时贴边也保持原音量。
+                floatingWindowDockVolumePercent = (args?.get("dockVolumePercent") as? Number)
+                    ?.toInt()?.coerceIn(10, 100)
+                    ?: if (args?.get("dockVolumeEnabled") == false) 100 else 30
                 floatingWindow?.updateSettings(
                     floatingWindowCornerRadius,
                     floatingWindowDockEnabled
                 )
+                updateFloatingVolumeGain()
                 // 关闭正在播放的小窗时由现有会话回到直播页，不销毁播放器或断流。
                 if (!floatingWindowEnabled && isFloating) onFloatingTap()
                 result.success(true)
@@ -988,7 +857,8 @@ class NativePlayerManager private constructor() {
             }
 
             "exitFloating" -> {
-                exitFloating()
+                val handover = (arguments as? Map<*, *>)?.get("handoverToPage") == true
+                exitFloating(handover)
                 result.success(true)
             }
 
@@ -1072,102 +942,6 @@ class NativePlayerManager private constructor() {
         }
     }
 
-    // ---------------------------------------------------------------- 纹理输出
-
-    /**
-     * 创建（或复用）Flutter 外部纹理，并把它作为页内画面输出。
-     *
-     * 返回纹理 id，Dart 侧用 `Texture(textureId: id)` 显示。
-     * 纹理只创建一次：重复调用直接返回已有 id，避免每次进页面都新建 Surface。
-     */
-    @Synchronized
-    private fun initTexture(): Long? {
-        val engine = engine ?: return null
-
-        // 已创建过就复用：Surface 对象必须缓存，
-        // applySurface 用引用相等去重，每次 new Surface 会导致重复 setVideoSurface。
-        if (textureEntry != null && pageSurface != null) {
-            applySurface()
-            // 关键：从悬浮小窗回到页面时纹理是复用的，
-            // 此时首帧事件早就发过了，不会再发第二次。
-            // 新页面收不到 firstFrame 就会一直卡在 loading（声音正常、画面被遮住）。
-            // 所以这里按当前是否已有画面补发一次。
-            if (frameConsumed) {
-                emit("firstFrame")
-            }
-            return textureId
-        }
-
-        return try {
-            val entry = engine.renderer.createSurfaceTexture()
-            // 引擎重建时视频尺寸可能不再回调，必须沿用当前流的尺寸。
-            entry.surfaceTexture().setDefaultBufferSize(
-                if (videoWidth > 0) videoWidth else 1920,
-                if (videoHeight > 0) videoHeight else 1080
-            )
-
-            // 首个视频帧被 Flutter 渲染管线消费掉，才说明画面真正可见。
-            // 在此之前纹理是空的，Dart 侧会盖一层 loading，避免出现黑灰空屏。
-            frameConsumed = false
-            entry.setOnFrameConsumedListener {
-                if (frameProduced && !frameConsumed) {
-                    frameConsumed = true
-                    emit("firstFrame")
-                }
-            }
-
-            val surface = Surface(entry.surfaceTexture())
-            textureEntry = entry
-            textureId = entry.id()
-            pageSurface = surface
-            applySurface()
-            textureId
-        } catch (e: Exception) {
-            Log.e(TAG, "initTexture failed: $e")
-            null
-        }
-    }
-
-    @Synchronized
-    private fun releaseTexture() {
-        // 先解绑，再释放纹理：Surface 释放后播放器不能再指向它
-        val released = pageSurface
-        pageSurface = null
-        if (boundSurface === released) {
-            boundSurface = null
-            applySurface()
-        }
-
-        try {
-            textureEntry?.setOnFrameConsumedListener(null)
-        } catch (_: Exception) {
-        }
-        try {
-            textureEntry?.surfaceTexture()?.setOnFrameAvailableListener(null)
-        } catch (_: Exception) {
-        }
-        try {
-            textureEntry?.release()
-        } catch (e: Exception) {
-            Log.w(TAG, "release texture failed: $e")
-        }
-        try {
-            released?.release()
-        } catch (e: Exception) {
-            Log.w(TAG, "release page surface failed: $e")
-        }
-
-        textureEntry = null
-        textureId = -1L
-    }
-
-    /** 首帧前由 Flutter 的不透明加载层遮住旧帧，不再改动解码输出缓冲区。 */
-    @Synchronized
-    fun clearTexture() {
-        frameProduced = false
-        frameConsumed = false
-    }
-
     // ---------------------------------------------------------------- 播放控制
 
     private fun ensurePlayer(): ExoPlayer? {
@@ -1188,10 +962,6 @@ class NativePlayerManager private constructor() {
             .build()
 
         exoPlayer.addListener(object : Player.Listener {
-            override fun onRenderedFirstFrame() {
-                frameProduced = true
-            }
-
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
                     Player.STATE_BUFFERING -> emit("buffering", mapOf("value" to true))
@@ -1241,18 +1011,8 @@ class NativePlayerManager private constructor() {
                 videoHeight = videoSize.height
                 videoAspect = newAspect.toDouble()
 
-                // 缓冲区只跟随真实视频尺寸，绝不使用窗口或旋转包围盒的尺寸。
-                try {
-                    textureEntry?.surfaceTexture()
-                        ?.setDefaultBufferSize(videoSize.width, videoSize.height)
-                } catch (e: Exception) {
-                    Log.w(TAG, "setDefaultBufferSize failed: $e")
-                }
-
                 if (sizeChanged || aspectChanged) {
-                    // 纹理方案的 Surface 句柄始终有效，不需要因为尺寸变化重绑。
-                    // 反过来，这里若强行 setVideoSurface 会让 ExoPlayer 重建视频输出，
-                    // 表现为画面闪一下甚至短暂黑屏。
+                    // Media3 自行布局原生 PlayerView；尺寸变化不手动重绑输出。
                     emit(
                         "videoSize",
                         mapOf(
@@ -1351,6 +1111,7 @@ class NativePlayerManager private constructor() {
         })
 
         player = exoPlayer
+        applyPlaybackVolume()
         boundSurface = null
         applySurface()
         return exoPlayer
@@ -1448,6 +1209,21 @@ class NativePlayerManager private constructor() {
         ) {}
     }
 
+    fun readPlaybackMetrics(): Map<String, Any> {
+        reloadMetricsFromTracks()
+        return mapOf(
+            "width" to metricsWidth, "height" to metricsHeight,
+            "aspectRatio" to videoAspect,
+            "videoBitrate" to if (measuredBitrate > 0) measuredBitrate else declaredBitrate.toLong(),
+            "frameRate" to if (measuredFrameRate > 0f) measuredFrameRate else declaredFrameRate,
+            "videoCodec" to videoCodec, "audioCodec" to audioCodec,
+            "audioChannels" to audioChannels, "audioSampleRate" to audioSampleRate,
+            "bitrateMeasured" to (measuredBitrate > 0),
+            "frameRateMeasured" to (measuredFrameRate > 0f),
+            "url" to (currentUrl ?: ""),
+        )
+    }
+
     /** 开/关播放参数采集。关闭后不再采集也不再回调 Dart。 */
     fun setMetricsListening(listening: Boolean) {
         metricsListening = listening
@@ -1542,12 +1318,6 @@ class NativePlayerManager private constructor() {
     fun open(url: String, headers: Map<String, String>?, forceReload: Boolean = false) {
         val exoPlayer = ensurePlayer() ?: return
 
-        // 页面内播放需要有纹理输出，否则 ExoPlayer 只出声音不出画面。
-        // 这里兜底创建一次，避免 Dart 侧漏调 initTexture 时出现「只有声音」。
-        if (textureEntry == null && !isFloating) {
-            initTexture()
-        }
-
         // ENDED 必须重新 prepare；停滞恢复也必须能强制重载同一个地址。
         if (!forceReload && url == currentUrl && !hasError &&
             (exoPlayer.playbackState == Player.STATE_READY ||
@@ -1558,9 +1328,6 @@ class NativePlayerManager private constructor() {
 
         currentUrl = url
         hasError = false
-        // 新的一路流要从头算首帧
-        frameProduced = false
-        frameConsumed = false
 
         val context = appContext ?: return
 
@@ -1591,19 +1358,14 @@ class NativePlayerManager private constructor() {
     fun reload(url: String, headers: Map<String, String>?) {
         currentUrl = null
         hasError = false
-        frameConsumed = false
         open(url, headers)
     }
 
     /**
      * 无缝换源：只替换媒体源，不销毁播放器、不重建 Surface。
      *
-     * 与 [reload] 的关键区别：
-     * - reload/open 走 `setMediaSource + prepare`，会重建整个播放管线；
-     *   但更重要的是它会把 [frameConsumed] 置 false，Dart 侧随即盖上一层 loading，
-     *   用户看到的就是「黑屏 + 转圈」。
-     * - switchSource 保留播放器实例与 Surface 绑定，画面在切源瞬间停顿极短，
-     *   不触发 loading 遮罩，视觉上接近无缝。
+     * 保留 PlayerView 与输出绑定。换源仍需要重新缓冲，
+     * PlayerView 在此期间保留上一帧，直到新源开始输出。
      *
      * 直播平台（斗鱼 wsSecret/wsTime、虎牙 txSecret 等）的取流地址带时效签名，
      * 播放十几分钟后地址失效，此时播放器既不报错也不 ended，只是卡住。
@@ -1637,7 +1399,6 @@ class NativePlayerManager private constructor() {
             .createMediaSource(MediaItem.fromUri(Uri.parse(url)))
 
         // 换源：setMediaSource + prepare 会重新缓冲，但不释放解码器与 Surface。
-        // 不重置 frameConsumed —— 纹理里上一帧还在，不需要 loading 遮罩。
         exoPlayer.setMediaSource(mediaSource)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
@@ -1666,13 +1427,21 @@ class NativePlayerManager private constructor() {
     }
 
     private fun stop() {
+        // 明确停止/换房才清旧画面，普通切线仍保留当前帧。
+        fullscreenView?.setKeepContentOnPlayerReset(false)
         player?.stop()
         player?.clearMediaItems()
+        fullscreenView?.setKeepContentOnPlayerReset(true)
         currentUrl = null
         hasError = false
     }
 
     fun release() {
+        onFloatingDockStateChanged(false, animate = false)
+        playbackVolume = 1f
+        floatingReturnListener?.let { player?.removeListener(it) }
+        floatingReturnListener = null
+        returningFromFloating = false
         hasError = false
         currentUrl = null
         boundSurface = null
@@ -1686,14 +1455,14 @@ class NativePlayerManager private constructor() {
         // 下一次回到前台会误把刚打开的播放当成「自己暂停的那次」拉起来，
         // 表现为「明明手动暂停了，切个房间回来自己播了」。
         pausedByHome = false
+        stoppedPageInBackground = false
         player?.release()
         player = null
     }
 
-    /** 完全销毁：播放器 + 纹理一起释放，换房间或关闭小窗时使用 */
+    /** 关闭小窗时结束播放。 */
     fun releaseAll() {
         release()
-        releaseTexture()
     }
 
     // ---------------------------------------------------------------- Surface 调度
@@ -1713,12 +1482,22 @@ class NativePlayerManager private constructor() {
 
     /**
      * 按优先级选出输出目标并绑定。
-     * 优先级：悬浮窗 > 页内纹理。
+     * 优先级：悬浮窗 > 原生播放页。
      * 这样「页面销毁」或「小窗关闭」任一事件发生时，输出都会自动落到另一方。
      */
     private fun applySurface() {
         val exoPlayer = player ?: return
-        val target = floatingSurface ?: pageSurface
+        val fullscreen = fullscreenView
+        if (fullscreen != null && (floatingSurface == null || returningFromFloating)) {
+            boundSurface = null
+            if (fullscreen.player !== exoPlayer) fullscreen.player = exoPlayer
+            return
+        }
+        if (fullscreen?.player != null) {
+            onHoldFullscreenFrame?.invoke(captureFullscreenFrame())
+            fullscreen.player = null
+        }
+        val target = floatingSurface
         if (target === boundSurface) {
             return
         }
@@ -1733,6 +1512,9 @@ class NativePlayerManager private constructor() {
     // ---------------------------------------------------------------- 悬浮窗
 
     private fun enterFloating(width: Int, height: Int): Boolean {
+        floatingReturnListener?.let { player?.removeListener(it) }
+        floatingReturnListener = null
+        returningFromFloating = false
         if (!floatingWindowEnabled || isTvDevice()) {
             return false
         }
@@ -1751,9 +1533,33 @@ class NativePlayerManager private constructor() {
         return shown
     }
 
-    private fun exitFloating() {
+    private fun exitFloating(handoverToPage: Boolean = false) {
+        if (!handoverToPage) { finishFloatingReturn(); return }
+        if (!isFloatingVisible()) { isFloating = false; return }
+        if (returningFromFloating) return
+        returningFromFloating = true
+        val exo = player
+        if (exo == null) { finishFloatingReturn(); return }
+        val listener = object : Player.Listener {
+            override fun onRenderedFirstFrame() {
+                fullscreenView?.postOnAnimation { if (floatingReturnListener === this) finishFloatingReturn() }
+            }
+            override fun onPlayerError(error: PlaybackException) { finishFloatingReturn() }
+        }
+        floatingReturnListener = listener
+        exo.addListener(listener)
+        // 页内输出可能还没创建，保持小窗和它的最后一帧，attachFullscreenView 会接续绑定。
+        applySurface()
+    }
+
+    private fun finishFloatingReturn() {
+        floatingReturnListener?.let { player?.removeListener(it) }
+        floatingReturnListener = null
+        // hide 的 Surface 回调仍应指向页内，不能先恢复“小窗优先”。
         floatingWindow?.hide()
+        returningFromFloating = false
         isFloating = false
+        applySurface()
     }
 
     fun hasOverlayPermission(): Boolean {
@@ -1815,6 +1621,7 @@ class NativePlayerManager private constructor() {
 
     /** 点击悬浮窗：先发事件让 Dart 侧准备，再把 App 拉回前台 */
     fun onFloatingTap() {
+        onPrepareFloatingReturn?.invoke()
         // 没有监听者时（引擎已销毁）先记下来，等 Dart 侧订阅时补发。
         // 否则这次点击会彻底丢失，表现为「点小窗回不到播放页」。
         if (eventSink == null) {

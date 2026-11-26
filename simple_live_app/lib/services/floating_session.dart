@@ -484,7 +484,7 @@ class FloatingSession {
     if (!AppSettingsController.instance.floatingDanmuEnable.value) {
       return;
     }
-    // 屏蔽规则与播放器弹幕共用一份实现（关键词 + 福袋），
+    // 屏蔽规则与播放器弹幕共用用户关键词/正则过滤实现，
     // 否则小窗里会冒出播放器里已经被屏蔽的内容
     if (DanmakuShielder.shouldBlock(msg)) {
       return;
@@ -807,7 +807,9 @@ class FloatingSession {
       // 小窗弹幕随小窗一起停。注意这里页面实例还在，
       // 它自己的 liveDanmaku 一直是活的，不用也不会重连。
       stopDanmaku().catchError((e) => Log.logPrint(e));
-      NativePlayerBridge.instance.exitFloating().catchError((e) {
+      NativePlayerBridge.instance
+          .exitFloating(handoverToPage: true)
+          .catchError((e) {
         Log.logPrint(e);
       });
       return;
@@ -872,6 +874,7 @@ class FloatingSession {
       if (!restoredFromFloating) {
         return;
       }
+      await NativePlayerBridge.instance.preparePlayerEntry();
       await Get.toNamed(
         RoutePath.kLiveRoomDetail,
         arguments: site,
@@ -882,6 +885,7 @@ class FloatingSession {
       Log.d("打开直播页失败：$e");
     } finally {
       _openingRoomPage = false;
+      await NativePlayerBridge.instance.cancelPlayerEntry();
     }
   }
 
@@ -909,9 +913,6 @@ class FloatingSession {
       Log.logPrint(e);
     });
     NativePlayerBridge.instance.release().catchError((e) {
-      Log.logPrint(e);
-    });
-    NativePlayerBridge.instance.releaseTexture().catchError((e) {
       Log.logPrint(e);
     });
     // 若此刻正停在直播页，一并退出该页

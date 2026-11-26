@@ -235,6 +235,11 @@ class FloatingPlayerWindow(
     private var closeButton: ImageView? = null
     private var dockHandle: ImageView? = null
     private var dockedSide: DockSide? = null
+        set(value) {
+            if (field == value) return
+            field = value
+            manager.onFloatingDockStateChanged(isShowing && value != null)
+        }
     private var edgeHintColorAnimator: ValueAnimator? = null
     private var edgeHintColor = EDGE_DOCK_COLOR
     private var edgeHintTargetColor = EDGE_DOCK_COLOR
@@ -359,8 +364,13 @@ class FloatingPlayerWindow(
         }
     }
 
+    fun captureFrame(): android.graphics.Bitmap? =
+        rootView?.let { root -> (0 until root.childCount).map { root.getChildAt(it) }
+            .filterIsInstance<TextureView>().firstOrNull()?.bitmap }
+
     fun show(width: Int, height: Int): Boolean {
         if (isShowing) {
+            manager.onFloatingDockStateChanged(dockedSide != null)
             return true
         }
         if (rootView != null) {
@@ -408,6 +418,11 @@ class FloatingPlayerWindow(
             ViewGroup.LayoutParams.MATCH_PARENT
         )
         container.addView(video, videoLp)
+        val heldFrame = ImageView(context).apply {
+            scaleType = ImageView.ScaleType.FIT_XY
+            setImageBitmap(manager.captureFullscreenFrame())
+        }
+        container.addView(heldFrame, FrameLayout.LayoutParams(-1, -1))
 
         video.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             private var outputSurface: Surface? = null
@@ -430,7 +445,17 @@ class FloatingPlayerWindow(
                 return true
             }
 
-            override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {}
+            override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {
+                // 新输出实际更新后才移除旧帧，不使用固定延迟猜测解码完成时间。
+                // TextureView 更新回调可发生在 dispatchGetDisplayList 遍历子节点期间。
+                // 必须排到消息队列，不在绘制栈里修改 ViewGroup 的 children 数组。
+                if (heldFrame.parent === container) container.post {
+                    if (heldFrame.parent === container) {
+                        container.removeView(heldFrame)
+                        heldFrame.setImageDrawable(null)
+                    }
+                }
+            }
         }
 
         // 圆角裁切
@@ -914,6 +939,7 @@ class FloatingPlayerWindow(
             rootView = container
             params = lp
             isShowing = true
+            manager.onFloatingDockStateChanged(dockedSide != null)
             updateDockHandle()
             // 提示条在小窗**之后**加，才能叠在它上面（见 hintLp 处的说明）
             try {
@@ -926,6 +952,7 @@ class FloatingPlayerWindow(
             true
         } catch (e: Exception) {
             Log.e(TAG, "addView failed: $e")
+            manager.onFloatingDockStateChanged(false, animate = false)
             releaseVideoSurface()
             rootView = null
             closeButton = null
@@ -1990,6 +2017,8 @@ class FloatingPlayerWindow(
     }
 
     fun hide(rememberPos: Boolean = true) {
+        // 离开小窗即撤销贴边增益，取消渐变，不能把低音量或动画留到播放页。
+        manager.onFloatingDockStateChanged(false, animate = false)
         mainHandler.removeCallbacks(screenChangeRunnable)
         mainHandler.removeCallbacks(hideCloseRunnable)
         mainHandler.removeCallbacks(showCloseRunnable)

@@ -50,6 +50,20 @@ class AppSettingsController extends GetxController {
         .clamp(0, 16);
     floatingWindowDockEnable.value = LocalStorageService.instance
         .getValue(LocalStorageService.kFloatingWindowDockEnable, true);
+    final savedDockVolume = LocalStorageService.instance.getValue<int?>(
+        LocalStorageService.kFloatingWindowDockVolumePercent, null);
+    // 优先读取百分比，首次升级保留旧开关关闭的含义，新用户默认30%。
+    final dockVolume = savedDockVolume ??
+        (LocalStorageService.instance.getValue(
+                LocalStorageService.kFloatingWindowDockVolumeEnable, true)
+            ? 30
+            : 100);
+    floatingWindowDockVolumePercent.value = dockVolume.clamp(10, 100);
+    if (savedDockVolume == null) {
+      LocalStorageService.instance.setValue(
+          LocalStorageService.kFloatingWindowDockVolumePercent,
+          floatingWindowDockVolumePercent.value);
+    }
 
     // 小窗弹幕默认关闭：小窗场景优先省电省流量，
     // 用户想在小窗看弹幕需要自己打开。
@@ -116,9 +130,6 @@ class AppSettingsController extends GetxController {
 
     // ignore: invalid_use_of_protected_member
     shieldList.value = LocalStorageService.instance.shieldBox.values.toSet();
-
-    danmuShieldFortuneBag.value = LocalStorageService.instance
-        .getValue(LocalStorageService.kDanmuShieldFortuneBag, false);
 
     scaleMode.value = LocalStorageService.instance.getValue(
       LocalStorageService.kPlayerScaleMode,
@@ -319,6 +330,15 @@ class AppSettingsController extends GetxController {
     syncFloatingWindowSettings();
   }
 
+  var floatingWindowDockVolumePercent = 30.obs;
+  void setFloatingWindowDockVolumePercent(int value) {
+    final percent = value.clamp(10, 100);
+    floatingWindowDockVolumePercent.value = percent;
+    LocalStorageService.instance.setValue(
+        LocalStorageService.kFloatingWindowDockVolumePercent, percent);
+    syncFloatingWindowSettings();
+  }
+
   /// 原生小窗可跨 Flutter 引擎存活，启动、进入小窗和修改设置时均同步。
   Future<void> syncFloatingWindowSettings() async {
     if (!GetPlatform.isAndroid) return;
@@ -327,6 +347,7 @@ class AppSettingsController extends GetxController {
         enabled: floatingWindowEnable.value,
         cornerRadius: floatingWindowCornerRadius.value.toDouble(),
         dockEnabled: floatingWindowDockEnable.value,
+        dockVolumePercent: floatingWindowDockVolumePercent.value,
       );
     } catch (e) {
       Log.logPrint(e);
@@ -502,17 +523,6 @@ class AppSettingsController extends GetxController {
   void addShieldList(String e) {
     shieldList.add(e);
     LocalStorageService.instance.shieldBox.put(e, e);
-  }
-
-  /// 屏蔽福袋 / 抽奖类弹幕
-  ///
-  /// 播放器与小窗共用同一个开关：规则只有一份实现（DanmakuShielder），
-  /// 两边的过滤都走它，不需要各自配置。
-  var danmuShieldFortuneBag = false.obs;
-  void setDanmuShieldFortuneBag(bool e) {
-    danmuShieldFortuneBag.value = e;
-    LocalStorageService.instance
-        .setValue(LocalStorageService.kDanmuShieldFortuneBag, e);
   }
 
   void removeShieldList(String e) {

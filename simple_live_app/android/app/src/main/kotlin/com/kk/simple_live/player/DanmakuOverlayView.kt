@@ -92,6 +92,8 @@ class DanmakuOverlayView(context: Context) : View(context) {
 
     private var fontSizePx: Float = 16f * scaledDensity
         set(value) {
+            // 时长/房间资料刷新也会同步样式；相同字号不能清掉在场弹幕。
+            if (field == value && paint.textSize == value) return
             field = value
             // 必须同时改 paint 与 strokePaint 的 textSize：
             // 之前只改了 strokeWidth，字号永远是 Paint 默认的 12px，
