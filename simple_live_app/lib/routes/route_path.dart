@@ -66,6 +66,9 @@ class RoutePath {
   /// 斗鱼 Web登录授权
   static const kDouyuWebLogin = "/settings/account/douyu/web_login";
 
+  /// ?? ttwid ????
+  static const kDouyinTtwidLogin = "/settings/account/douyin/ttwid_login";
+
   /// 数据同步
   static const kLocalSync = "/local_sync";
 

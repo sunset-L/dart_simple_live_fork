@@ -111,9 +111,34 @@ class FollowService extends GetxService {
       DBService.instance.updateFollowTag(tag);
     }
     // 标签内排序
-    curTagFollowList.sort(
-      (a, b) => b.liveStatus.value.compareTo(a.liveStatus.value),
-    );
+    curTagFollowList.assignAll(sortFollowUsers(curTagFollowList));
+  }
+
+  /// Groups users by configured platform order, then puts live users first
+  /// within each platform while preserving the original order for ties.
+  List<FollowUser> sortFollowUsers(Iterable<FollowUser> users) {
+    final platformOrder = {
+      for (var index = 0;
+          index < AppSettingsController.instance.siteSort.length;
+          index++)
+        AppSettingsController.instance.siteSort[index]: index,
+    };
+    final indexedUsers = users.toList().asMap().entries.toList();
+
+    indexedUsers.sort((a, b) {
+      final platformComparison =
+          (platformOrder[a.value.siteId] ?? platformOrder.length)
+              .compareTo(platformOrder[b.value.siteId] ?? platformOrder.length);
+      if (platformComparison != 0) return platformComparison;
+
+      final statusComparison =
+          b.value.liveStatus.value.compareTo(a.value.liveStatus.value);
+      if (statusComparison != 0) return statusComparison;
+
+      return a.key.compareTo(b.key);
+    });
+
+    return indexedUsers.map((entry) => entry.value).toList();
   }
 
   // 添加关注
@@ -264,7 +289,7 @@ class FollowService extends GetxService {
   }
 
   void filterData() {
-    followList.sort((a, b) => b.liveStatus.value.compareTo(a.liveStatus.value));
+    followList.assignAll(sortFollowUsers(followList));
     liveList.assignAll(followList.where((x) => x.liveStatus.value == 2));
     notLiveList.assignAll(followList.where((x) => x.liveStatus.value == 1));
     _updatedListController.add(0);

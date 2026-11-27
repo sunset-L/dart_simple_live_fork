@@ -133,8 +133,7 @@ class FollowUserController extends BasePageController<FollowUser> {
           .map((id) => usersById[id])
           .whereType<FollowUser>()
           .toList();
-      users.sort((a, b) => b.liveStatus.value.compareTo(a.liveStatus.value));
-      pages[tag.id] = users;
+      pages[tag.id] = service.sortFollowUsers(users);
     }
     tagUsers.value = pages;
     _updateSelectedList();

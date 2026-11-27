@@ -27,6 +27,8 @@ import 'package:simple_live_app/modules/mine/account/bilibili/web_login_controll
 import 'package:simple_live_app/modules/mine/account/bilibili/web_login_page.dart';
 import 'package:simple_live_app/modules/mine/account/douyu/web_login_controller.dart';
 import 'package:simple_live_app/modules/mine/account/douyu/web_login_page.dart';
+import 'package:simple_live_app/modules/mine/account/douyin/ttwid_login_controller.dart';
+import 'package:simple_live_app/modules/mine/account/douyin/ttwid_login_page.dart';
 import 'package:simple_live_app/modules/settings/appstyle_setting_page.dart';
 import 'package:simple_live_app/modules/settings/auto_exit_settings_page.dart';
 import 'package:simple_live_app/modules/settings/danmu_settings_page.dart';
@@ -191,6 +193,13 @@ class AppPages {
       page: () => const DouyuWebLoginPage(),
       bindings: [
         BindingsBuilder.put(() => DouyuWebLoginController()),
+      ],
+    ),
+    GetPage(
+      name: RoutePath.kDouyinTtwidLogin,
+      page: () => const DouyinTtwidLoginPage(),
+      bindings: [
+        BindingsBuilder.put(() => DouyinTtwidLoginController()),
       ],
     ),
     // 数据同步

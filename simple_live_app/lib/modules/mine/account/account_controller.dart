@@ -98,97 +98,99 @@ class AccountController extends GetxController {
     await BiliBiliAccountService.instance.loadUserInfo();
     if (BiliBiliAccountService.instance.logined.value &&
         BiliBiliAccountService.instance.name.value != "未登录") {
-      SmartDialog.showToast("已登录：${BiliBiliAccountService.instance.name.value}");
+      SmartDialog.showToast(
+          "已登录：${BiliBiliAccountService.instance.name.value}");
     }
   }
 
-  void douyinTap() async {
-    if (DouyinAccountService.instance.hasCookie.value) {      var result =
-          await Utils.showAlertDialog("确定要清除自定义 ttwid 吗？", title: "清除配置");
-      if (result) {
-        DouyinAccountService.instance.clearCookie();
-        SmartDialog.showToast("已清除自定义 ttwid，将使用默认 ttwid");
-      }
-    } else {
-      doDouyinCookieConfig();
-    }
-  }
-
-  void doDouyinCookieConfig() {
-    // 初始化文本框时，只显示 ttwid 的值部分
-    var savedCookie = DouyinAccountService.instance.cookie;
-    var displayText = savedCookie;
-    if (savedCookie.startsWith('ttwid=')) {
-      displayText = savedCookie.substring(6); // 去掉 "ttwid="
-    }
-    var controller = TextEditingController(text: displayText);
-
-    Get.dialog(
-      AlertDialog(
-        title: const Text("配置抖音 ttwid"),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                "默认已内置有效的 ttwid，可观看所有画质（包括蓝光）。\n如有需要可自定义配置。",
-                style: TextStyle(fontSize: 12, color: Colors.grey),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: controller,
-                maxLines: 3,
-                decoration: const InputDecoration(
-                  hintText: "请粘贴 ttwid 值（留空则使用默认值）",
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextButton.icon(
-                onPressed: () {
-                  // 提取 ttwid 的值部分（去掉 "ttwid=" 前缀）
-                  var defaultValue = DouyinSite.kDefaultCookie;
-                  if (defaultValue.startsWith('ttwid=')) {
-                    defaultValue = defaultValue.substring(6); // 去掉 "ttwid="
-                  }
-                  controller.text = defaultValue;
-                },
-                icon: const Icon(Icons.restore),
-                label: const Text("恢复默认 ttwid"),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Get.back(),
-            child: const Text("取消"),
-          ),
-          TextButton(
-            onPressed: () {
-              var input = controller.text.trim();
+  void douyinTap() {
+    Utils.showCompactBottomSheet(
+      title: "抖音直播 ttwid",
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.login),
+            title: const Text("网页登录授权"),
+            subtitle: const Text("打开抖音直播页面并读取 ttwid"),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
               Get.back();
-              if (input.isEmpty) {
-                DouyinAccountService.instance.clearCookie();
-                SmartDialog.showToast("已清除自定义 Cookie，将使用默认 ttwid");
-              } else {
-                // 如果用户只输入了 ttwid 值，自动添加 "ttwid=" 前缀
-                var cookie = input;
-                if (!input.startsWith('ttwid=')) {
-                  cookie = 'ttwid=$input';
-                }
-                DouyinAccountService.instance.setCookie(cookie);
-                SmartDialog.showToast("ttwid 已保存");
-              }
+              Get.toNamed(RoutePath.kDouyinTtwidLogin);
             },
-            child: const Text("确定"),
           ),
+          ListTile(
+            leading: const Icon(Icons.edit_outlined),
+            title: const Text("手动填写 ttwid"),
+            subtitle: const Text("可填写 ttwid 值或整行 Cookie"),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Get.back();
+              doDouyinCookieConfig();
+            },
+          ),
+          if (DouyinAccountService.instance.hasCookie.value)
+            ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: const Text("清除已保存的 ttwid"),
+              subtitle: const Text("清除后自动获取访客凭证"),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () async {
+                Get.back();
+                final result = await Utils.showAlertDialog(
+                  "确定要清除已保存的 ttwid 吗？",
+                  title: "清除配置",
+                );
+                if (result) {
+                  DouyinAccountService.instance.clearCookie();
+                  SmartDialog.showToast("已清除 ttwid，将自动获取访客凭证");
+                }
+              },
+            ),
         ],
       ),
     );
   }
 
+  void doDouyinCookieConfig() async {
+    final savedCookie = DouyinAccountService.instance.cookie;
+    final initialValue = savedCookie.startsWith('ttwid=')
+        ? savedCookie.substring('ttwid='.length)
+        : savedCookie;
+    final input = await Utils.showEditTextDialog(
+      initialValue,
+      title: "请输入抖音 ttwid",
+      hintText: "填写 ttwid 值，或粘贴包含 ttwid 的 Cookie",
+    );
+    if (input == null || input.trim().isEmpty) {
+      return;
+    }
+
+    final ttwid = _parseDouyinTtwid(input);
+    if (ttwid == null) {
+      SmartDialog.showToast("未找到有效的 ttwid，请检查输入内容");
+      return;
+    }
+    DouyinAccountService.instance.setCookie(ttwid);
+    SmartDialog.showToast("抖音 ttwid 已保存");
+  }
+
+  String? _parseDouyinTtwid(String input) {
+    final value = input.trim();
+    for (final part in value.split(';')) {
+      final separator = part.indexOf('=');
+      if (separator <= 0) continue;
+      final name = part.substring(0, separator).trim();
+      if (name.toLowerCase() == 'ttwid') {
+        final cookieValue = part.substring(separator + 1).trim();
+        return cookieValue.isEmpty ? null : 'ttwid=$cookieValue';
+      }
+    }
+    if (!value.contains('=') && !value.contains(';')) {
+      return 'ttwid=$value';
+    }
+    return null;
+  }
   // ------------------------------------------------------------- 斗鱼账号
 
   /// 斗鱼账号入口
@@ -230,9 +232,8 @@ class AccountController extends GetxController {
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () async {
                   Get.back();
-                  var result = await Utils.showAlertDialog(
-                      "确定要退出斗鱼账号吗？",
-                      title: "退出登录");
+                  var result =
+                      await Utils.showAlertDialog("确定要退出斗鱼账号吗？", title: "退出登录");
                   if (result) {
                     DouyuAccountService.instance.clearAuth();
                     SmartDialog.showToast("已清除斗鱼授权，画质与地址有效期将恢复默认");
