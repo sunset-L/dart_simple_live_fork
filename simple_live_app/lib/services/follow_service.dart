@@ -17,6 +17,7 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/follow_user_tag.dart';
 import 'package:simple_live_app/services/db_service.dart';
+import 'package:simple_live_app/services/follow_live_status.dart';
 
 class FollowService extends GetxService {
   StreamSubscription<dynamic>? subscription;
@@ -40,12 +41,12 @@ class FollowService extends GetxService {
   /// 当前tag的用户列表
   RxList<FollowUser> curTagFollowList = RxList<FollowUser>();
 
-  /// 已经更新状态的数量
-  var updatedCount = 0;
-
   /// 是否正在更新
   var updating = false.obs;
 
+  Future<void>? _statusUpdate;
+  final _scheduledStatusUsers = Set<FollowUser>.identity();
+  final _pendingStatusUsers = <FollowUser>[];
   Timer? updateTimer;
 
   @override
@@ -141,14 +142,16 @@ class FollowService extends GetxService {
     bool updateStatus = true,
     bool waitForStatus = false,
   }) async {
-    var list = DBService.instance.getFollowList();
+    final list = DBService.instance.getFollowList();
     getAllTagList();
-    if (list.isEmpty) {
-      updating.value = false;
+    final currentUsers = followList.toSet();
+    if (list.length != currentUsers.length ||
+        !list.every(currentUsers.contains)) {
       followList.assignAll(list);
-      return;
+      final loadedUsers = list.toSet();
+      curTagFollowList.removeWhere((user) => !loadedUsers.contains(user));
+      filterData();
     }
-    followList.assignAll(list);
     if (updateStatus) {
       final update = startUpdateStatus();
       // 原生播放页的刷新控件需要等待查询完成；首页仍保持后台更新方式。
@@ -195,62 +198,68 @@ class FollowService extends GetxService {
     return result;
   }
 
-  Future<void> startUpdateStatus() async {
-    updatedCount = 0;
+  Future<void> startUpdateStatus() {
+    _pendingStatusUsers.addAll(followList.where(_scheduledStatusUsers.add));
+    final activeUpdate = _statusUpdate;
+    if (activeUpdate != null) return activeUpdate;
+    if (_pendingStatusUsers.isEmpty) return Future<void>.value();
+
+    final update = Future<void>.microtask(_runStatusUpdate);
+    _statusUpdate = update;
     updating.value = true;
+    return update;
+  }
 
-    var concurrency = getOptimalConcurrency();
+  Future<void> _runStatusUpdate() async {
+    try {
+      while (_pendingStatusUsers.isNotEmpty) {
+        final snapshot = interleaveByPlatform(_pendingStatusUsers);
+        _pendingStatusUsers.clear();
+        await _refreshStatuses(snapshot);
+        if (_pendingStatusUsers.isEmpty) filterData();
+      }
+    } finally {
+      _pendingStatusUsers.clear();
+      _scheduledStatusUsers.clear();
+      _statusUpdate = null;
+      updating.value = false;
+    }
+  }
 
-    Log.logPrint("开始更新关注状态，并发数: $concurrency，总数: ${followList.length}");
+  Future<void> _refreshStatuses(List<FollowUser> snapshot) async {
+    final concurrency = getOptimalConcurrency().clamp(1, snapshot.length);
+    Log.logPrint("开始更新关注状态，并发数: $concurrency，总数: ${snapshot.length}");
 
-    // 按平台交错排列，避免单一平台阻塞
-    var interleavedList = interleaveByPlatform(followList);
+    final taskQueue = Queue<FollowUser>.from(snapshot);
+    final followBox = DBService.instance.followBox;
 
-    // 创建任务队列
-    var taskQueue = Queue<FollowUser>.from(interleavedList);
-
-    // 工作函数 - 持续从队列中取任务执行
-    Future<void> worker(int workerId) async {
+    Future<void> worker() async {
       while (taskQueue.isNotEmpty) {
-        var item = taskQueue.removeFirst();
-        await updateLiveStatus(item);
+        final item = taskQueue.removeFirst();
+        if (identical(followBox.get(item.id), item)) {
+          await updateLiveStatus(item);
+        } else {
+          _scheduledStatusUsers.remove(item);
+        }
       }
     }
 
-    // 启动固定数量的并发 worker
-    var workers = <Future>[];
-    for (var i = 0; i < concurrency; i++) {
-      workers.add(worker(i));
-    }
-
-    await Future.wait(workers);
+    await Future.wait(
+        [for (var index = 0; index < concurrency; index++) worker()]);
 
     Log.logPrint("关注状态更新完成");
   }
 
-  Future updateLiveStatus(FollowUser item) async {
+  Future<void> updateLiveStatus(FollowUser item) async {
     try {
-      var site = Sites.allSites[item.siteId]!;
-      // 先只查状态
-      var isLiving = await site.liveSite.getLiveStatus(roomId: item.roomId);
-      item.liveStatus.value = isLiving ? 2 : 1;
-      if (item.liveStatus.value == 2) {
-        // 只有正在直播时才查详细信息
-        var detail = await site.liveSite.getRoomDetail(roomId: item.roomId);
-        item.liveStartTime = detail.showTime;
-      } else {
-        item.liveStartTime = null;
-      }
+      final site = Sites.allSites[item.siteId]!;
+      final status = await fetchFollowLiveStatus(site.liveSite, item.roomId);
+      item.liveStartTime = status.startTime;
+      item.liveStatus.value = status.isLiving ? 2 : 1;
     } catch (e) {
       Log.logPrint(e);
-      item.liveStatus.value = 0;
       item.liveStartTime = null;
-    } finally {
-      updatedCount++;
-      if (updatedCount >= followList.length) {
-        filterData();
-        updating.value = false;
-      }
+      item.liveStatus.value = 0;
     }
   }
 

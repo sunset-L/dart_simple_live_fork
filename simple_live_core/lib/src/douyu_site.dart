@@ -339,9 +339,7 @@ class DouyuSite implements LiveSite {
     if (requestedRate != 0) {
       return;
     }
-    final fileName = Uri.decodeComponent(
-      url.split('?').first.split('/').last,
-    );
+    final fileName = Uri.decodeComponent(url.split('?').first.split('/').last);
     final suffix = RegExp(r'_(\d+)\.(?:flv|m3u8)$').firstMatch(fileName);
     if (suffix != null) {
       lastQualityDowngraded = true;
@@ -533,15 +531,7 @@ class DouyuSite implements LiveSite {
   Future<LiveRoomDetail> getRoomDetail({required String roomId}) async {
     Map roomInfo = await _getRoomInfo(roomId);
 
-    Map h5RoomInfo = await HttpClient.instance.getJson(
-      "https://www.douyu.com/swf_api/h5room/$roomId",
-      queryParameters: {},
-      header: {
-        'referer': 'https://www.douyu.com/$roomId',
-        'user-agent': kUserAgent,
-      },
-    );
-    String? showTime = h5RoomInfo["data"]?["show_time"]?.toString();
+    final showTime = await getLiveStartTime(roomId: roomId);
 
     var jsEncResult = await HttpClient.instance.getText(
       "https://www.douyu.com/swf_api/homeH5Enc?rids=$roomId",
@@ -694,6 +684,18 @@ class DouyuSite implements LiveSite {
   Future<bool> getLiveStatus({required String roomId}) async {
     var roomInfo = await _getRoomInfo(roomId);
     return roomInfo["show_status"] == 1 && roomInfo["videoLoop"] != 1;
+  }
+
+  Future<String?> getLiveStartTime({required String roomId}) async {
+    final roomInfo = await HttpClient.instance.getJson(
+      "https://www.douyu.com/swf_api/h5room/$roomId",
+      queryParameters: {},
+      header: {
+        'referer': 'https://www.douyu.com/$roomId',
+        'user-agent': kUserAgent,
+      },
+    );
+    return roomInfo["data"]?["show_time"]?.toString();
   }
 
   int parseHotNum(String hn) {
