@@ -1,7 +1,9 @@
 package com.kk.simple_live.player
 
 import android.app.Activity
+import android.content.Context
 import android.graphics.Color
+import android.media.AudioManager
 import android.provider.Settings
 import android.view.GestureDetector
 import android.view.Gravity
@@ -71,14 +73,14 @@ class NativePlayerView(
     var onShowPanel: (String) -> Unit = {}
     private val originalBrightness = activity.window.attributes.screenBrightness
     private val hideControls = Runnable { setControlsVisible(false) }
-    private val playerManager = NativePlayerManager.instance
+    private val audioManager = activity.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     // 固定物理滑动尺度，横竖屏都以300dp对应完整范围，不随视频高度放大。
     private val gestureRange = dp(300).toFloat()
     private val gestureThreshold = maxOf(dp(16), ViewConfiguration.get(activity).scaledTouchSlop).toFloat()
     private var gestureX = 0f
     private var gestureY = 0f
-    private var gestureVolume = 1f
-    private var gestureVolumeChanged = false
+    private var gestureVolume = 0
+    private var gestureVolumeMax = 0
     private var gestureBrightness = 0.5f
     private var dragging = false
     private var gestureActive = false
@@ -417,13 +419,6 @@ class NativePlayerView(
             }
         })
 
-    private fun commitGestureVolume() {
-        if (!gestureVolumeChanged) return
-        gestureVolumeChanged = false
-        // 实时调节留在原生，抬手/中断时才保存浮点基准，避免每帧跨桥写入设置。
-        onAction("volume", playerManager.userPlaybackVolume.toDouble() * 100)
-    }
-
     private fun currentBrightness(): Float {
         val windowValue = activity.window.attributes.screenBrightness
         if (windowValue.isFinite() && windowValue >= 0f) return windowValue.coerceIn(.01f, 1f)
@@ -433,7 +428,6 @@ class NativePlayerView(
     }
 
     private fun cancelGesture(force: Boolean = false) {
-        commitGestureVolume()
         tip.visibility = GONE
         // 构造时 setFullscreen 也会走到这里，此时还未创建 GestureDetector。
         if (!force && !gestureActive && !dragging) return
@@ -445,7 +439,7 @@ class NativePlayerView(
     override fun onConfigurationChanged(config: android.content.res.Configuration) {
         super.onConfigurationChanged(config)
         cancelGesture()
-        // 亮度跟随房间、浮点音量由播放器管理，旋转只取消手势，不回放旧快照。
+        // Brightness stays room-scoped; system media volume is applied immediately.
         roomBrightness?.let { value ->
             activity.window.attributes = activity.window.attributes.apply { screenBrightness = value }
         }
@@ -470,7 +464,10 @@ class NativePlayerView(
                 gestureOnVolume = event.x >= width / 2f
                 gestureX = event.x
                 gestureY = event.y
-                gestureVolumeChanged = false
+                if (gestureOnVolume) {
+                    gestureVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                    gestureVolumeMax = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(0)
+                }
                 dragging = false
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
@@ -484,7 +481,6 @@ class NativePlayerView(
                     dragging = true
                     // 触发前的位移仅用于判定意图，不计入调节，避免起步跳变。
                     gestureY = event.y
-                    gestureVolume = playerManager.userPlaybackVolume
                     gestureBrightness = currentBrightness()
                     val cancel = MotionEvent.obtain(event)
                     cancel.action = MotionEvent.ACTION_CANCEL
@@ -495,14 +491,15 @@ class NativePlayerView(
                 if (dragging) {
                     val delta = (gestureY - event.y) / gestureRange
                     if (gestureOnVolume) {
-                        val value = (gestureVolume + delta).coerceIn(0f, 1f)
-                        if (value != playerManager.userPlaybackVolume) {
-                            playerManager.setPlaybackVolume(value)
-                            gestureVolumeChanged = true
+                        val maxVolume = gestureVolumeMax
+                        val value = (gestureVolume + delta * maxVolume)
+                            .roundToInt().coerceIn(0, maxVolume)
+                        if (audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) != value) {
+                            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, value, 0)
                         }
-                        // 只有显示取整，实际音量始终保留浮点精度，不使用系统整数档位。
-                        tip.text = "音量 ${(value * 100).roundToInt()}%"
-                        if (value == 0f || value == 1f) {
+                        val percent = if (maxVolume > 0) value * 100 / maxVolume else 0
+                        tip.text = "音量 $percent%"
+                        if (value == 0 || value == maxVolume) {
                             gestureVolume = value; gestureY = event.y
                         }
                     } else {
@@ -521,7 +518,6 @@ class NativePlayerView(
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (!gestureActive) return true
-                commitGestureVolume()
                 gestureActive = false
                 tip.visibility = GONE
                 scheduleHide()

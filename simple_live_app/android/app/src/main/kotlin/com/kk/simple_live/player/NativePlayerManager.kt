@@ -148,8 +148,6 @@ class NativePlayerManager private constructor() {
         updateFloatingVolumeGain(animate)
     }
 
-    val userPlaybackVolume: Float get() = playbackVolume
-
     fun setPlaybackVolume(value: Float) {
         playbackVolume = if (value.isFinite()) value.coerceIn(0f, 1f) else 1f
         applyPlaybackVolume()
