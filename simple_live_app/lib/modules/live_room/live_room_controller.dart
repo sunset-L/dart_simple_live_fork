@@ -151,6 +151,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   final _historyLiveStatus = ManualLiveStatusCache();
   bool _nativeFollowRefreshing = false;
   bool _nativeHistoryRefreshing = false;
+  // 即使开始/结束状态被合并、列表内容相同，也必须通知原生控件结束刷新。
+  int _nativeRoomRefreshRevision = 0;
 
   @override
   Map<String, dynamic> get nativePageData => {
@@ -198,6 +200,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         'history': _nativeHistory,
         'followRefreshing': _nativeFollowRefreshing,
         'historyRefreshing': _nativeHistoryRefreshing,
+        'roomRefreshRevision': _nativeRoomRefreshRevision,
         'qualities': qualites.map((e) => e.quality).toList(),
         'qualityIndex': currentQuality,
         'playbackSuspended': _backgroundPlaybackSuspended,
@@ -263,7 +266,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   Future<void> _reloadNativeRooms({bool refresh = false}) async {
-    if (refresh) await FollowService.instance.loadData();
+    if (refresh) await FollowService.instance.loadData(waitForStatus: true);
     if (_disposed) return;
     _nativeFollows = FollowService.instance.liveList
         .map((item) => {
@@ -315,6 +318,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       if (!_disposed) _showToast('关注列表刷新失败');
     } finally {
       _nativeFollowRefreshing = false;
+      _nativeRoomRefreshRevision++;
       if (!_disposed) syncNativePage();
     }
   }
@@ -345,6 +349,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       if (!_disposed) _showToast('历史直播状态刷新失败');
     } finally {
       _nativeHistoryRefreshing = false;
+      _nativeRoomRefreshRevision++;
       if (!_disposed) syncNativePage();
     }
   }

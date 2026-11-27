@@ -246,8 +246,8 @@ class NativeLiveRoomPage(private val activity: Activity, player: ExoPlayer,
             }
             if (themeChanged || changed("superChats")) paintTabs()
         }
-        if (changed("followRefreshing")) followRefresh?.setRefreshing(values["followRefreshing"] == true)
-        if (themeChanged || changed("follows", "history", "roomKey", "followRefreshing", "historyRefreshing")) sheetRefresh?.invoke()
+        if (changed("followRefreshing", "roomRefreshRevision")) followRefresh?.setRefreshing(values["followRefreshing"] == true)
+        if (themeChanged || changed("follows", "history", "roomKey", "followRefreshing", "historyRefreshing", "roomRefreshRevision")) sheetRefresh?.invoke()
         if (changed("lineIndex", "qualityIndex")) sheetSelectionRefresh?.invoke()
         if (changed("aspectRatio", "hasSC")) requestLayout()
     }

@@ -137,7 +137,10 @@ class FollowService extends GetxService {
     }
   }
 
-  Future<void> loadData({bool updateStatus = true}) async {
+  Future<void> loadData({
+    bool updateStatus = true,
+    bool waitForStatus = false,
+  }) async {
     var list = DBService.instance.getFollowList();
     getAllTagList();
     if (list.isEmpty) {
@@ -147,7 +150,9 @@ class FollowService extends GetxService {
     }
     followList.assignAll(list);
     if (updateStatus) {
-      startUpdateStatus();
+      final update = startUpdateStatus();
+      // 原生播放页的刷新控件需要等待查询完成；首页仍保持后台更新方式。
+      if (waitForStatus) await update;
     }
   }
 
@@ -190,7 +195,7 @@ class FollowService extends GetxService {
     return result;
   }
 
-  void startUpdateStatus() async {
+  Future<void> startUpdateStatus() async {
     updatedCount = 0;
     updating.value = true;
 
