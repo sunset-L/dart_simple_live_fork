@@ -77,6 +77,8 @@ class NativePlayerView(
     // 固定物理滑动尺度，横竖屏都以300dp对应完整范围，不随视频高度放大。
     private val gestureRange = dp(300).toFloat()
     private val gestureThreshold = maxOf(dp(16), ViewConfiguration.get(activity).scaledTouchSlop).toFloat()
+    // 起步死区计入总行程，越过阈值后的剩余行程覆盖完整调节范围。
+    private val gestureActiveRange = (gestureRange - gestureThreshold).coerceAtLeast(1f)
     private var gestureX = 0f
     private var gestureY = 0f
     private var gestureVolume = 0
@@ -479,8 +481,9 @@ class NativePlayerView(
                 val dy = gestureY - event.y
                 if (!dragging && abs(dy) > gestureThreshold && abs(dy) > abs(event.x - gestureX) * 1.3f) {
                     dragging = true
-                    // 触发前的位移仅用于判定意图，不计入调节，避免起步跳变。
-                    gestureY = event.y
+                    // 起点只向滑动方向偏移一个阈值，保留首次触发时超出的位移。
+                    // 死区只用于起步，进入调节后反向滑动无需重新越过阈值。
+                    gestureY -= if (dy > 0f) gestureThreshold else -gestureThreshold
                     gestureBrightness = currentBrightness()
                     val cancel = MotionEvent.obtain(event)
                     cancel.action = MotionEvent.ACTION_CANCEL
@@ -489,7 +492,7 @@ class NativePlayerView(
                     removeCallbacks(hideControls)
                 }
                 if (dragging) {
-                    val delta = (gestureY - event.y) / gestureRange
+                    val delta = (gestureY - event.y) / gestureActiveRange
                     if (gestureOnVolume) {
                         val maxVolume = gestureVolumeMax
                         val value = (gestureVolume + delta * maxVolume)
