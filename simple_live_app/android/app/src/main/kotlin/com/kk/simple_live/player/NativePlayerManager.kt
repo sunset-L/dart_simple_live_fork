@@ -148,6 +148,13 @@ class NativePlayerManager private constructor() {
         updateFloatingVolumeGain(animate)
     }
 
+    val userPlaybackVolume: Float get() = playbackVolume
+
+    fun setPlaybackVolume(value: Float) {
+        playbackVolume = if (value.isFinite()) value.coerceIn(0f, 1f) else 1f
+        applyPlaybackVolume()
+    }
+
     private fun applyPlaybackVolume() {
         player?.volume = (playbackVolume * floatingVolumeGain).coerceIn(0f, 1f)
     }
@@ -770,8 +777,7 @@ class NativePlayerManager private constructor() {
 
             "setVolume" -> {
                 val volume = (arguments as? Number)?.toFloat() ?: 1f
-                playbackVolume = if (volume.isFinite()) volume.coerceIn(0f, 1f) else 1f
-                applyPlaybackVolume()
+                setPlaybackVolume(volume)
                 result.success(true)
             }
 

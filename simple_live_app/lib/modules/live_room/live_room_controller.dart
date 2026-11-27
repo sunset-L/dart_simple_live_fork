@@ -391,6 +391,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       _resumeBackgroundPlayback();
       return;
     }
+    // 旋转会取消当前手势，仍需接收最终浮点音量，不能被转屏锁挡掉。
+    if (action == 'volume') {
+      super.onNativePageAction(action, value);
+      return;
+    }
     if (fullScreenTransitioning.value) return;
     final settings = AppSettingsController.instance;
     switch (action) {

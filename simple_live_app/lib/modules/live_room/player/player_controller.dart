@@ -247,9 +247,16 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   }
 
   void onNativePageAction(String action, dynamic value) {
-    if (_systemDisposed || fullScreenTransitioning.value) {
+    if (_systemDisposed || !_ownsNativePage) return;
+    if (action == 'volume') {
+      // 原生已实时应用浮点音量；仅保存基准，切线/重连时不要恢复为旧值。
+      if (value is num && value.isFinite) {
+        AppSettingsController.instance
+            .setPlayerVolume(value.toDouble().clamp(0.0, 100.0));
+      }
       return;
     }
+    if (fullScreenTransitioning.value) return;
     if (action == 'fullscreen') {
       enterFullScreen();
       return;
