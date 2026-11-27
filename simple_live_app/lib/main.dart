@@ -7,99 +7,32 @@ import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
-import 'package:hive_flutter/hive_flutter.dart';
 import 'package:logger/logger.dart';
-import 'package:package_info_plus/package_info_plus.dart';
+import 'package:simple_live_app/app/app_bootstrap.dart';
 import 'package:simple_live_app/app/app_style.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/log.dart';
-import 'package:simple_live_app/app/utils.dart';
-import 'package:simple_live_app/models/db/follow_user.dart';
-import 'package:simple_live_app/models/db/follow_user_tag.dart';
-import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/modules/other/debug_log_page.dart';
 import 'package:simple_live_app/routes/app_pages.dart';
 import 'package:simple_live_app/routes/route_path.dart';
-import 'package:simple_live_app/services/bilibili_account_service.dart';
-import 'package:simple_live_app/services/douyin_account_service.dart';
-import 'package:simple_live_app/services/douyu_account_service.dart';
-import 'package:simple_live_app/services/db_service.dart';
-import 'package:simple_live_app/services/follow_service.dart';
 import 'package:simple_live_app/services/floating_session.dart';
-import 'package:simple_live_app/services/local_storage_service.dart';
-import 'package:simple_live_app/services/sync_service.dart';
 import 'package:simple_live_app/widgets/status/app_loadding_widget.dart';
-import 'package:simple_live_core/simple_live_core.dart';
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Hive.initFlutter();
-  //初始化服务
-  await initServices();
-  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-  //设置状态栏为透明
-  SystemUiOverlayStyle systemUiOverlayStyle = const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.dark,
-    systemNavigationBarColor: Colors.transparent,
+  await initializeApp();
+  unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.dark,
+      systemNavigationBarColor: Colors.transparent,
+    ),
   );
-  SystemChrome.setSystemUIOverlayStyle(systemUiOverlayStyle);
   // 全局接管悬浮小窗的点击/关闭事件：
   // 返回进小窗后直播页会被 pop，页面级的监听收不到这些事件
   FloatingSession.instance.init();
   runApp(const MyApp());
-}
-
-Future initServices() async {
-  Hive.registerAdapter(FollowUserAdapter());
-  Hive.registerAdapter(HistoryAdapter());
-  Hive.registerAdapter(FollowUserTagAdapter());
-
-  //包信息
-  Utils.packageInfo = await PackageInfo.fromPlatform();
-  //本地存储
-  Log.d("Init LocalStorage Service");
-  await Get.put(LocalStorageService()).init();
-  await Get.put(DBService()).init();
-  //初始化设置控制器
-  Get.put(AppSettingsController());
-
-  Get.put(BiliBiliAccountService());
-
-  Get.put(DouyinAccountService());
-
-  Get.put(DouyuAccountService());
-
-  Get.put(SyncService());
-
-  Get.put(FollowService());
-
-  initCoreLog();
-}
-
-void initCoreLog() {
-  //日志信息
-  CoreLog.enableLog =
-      !kReleaseMode || AppSettingsController.instance.logEnable.value;
-  CoreLog.requestLogType = RequestLogType.short;
-  CoreLog.onPrintLog = (level, msg) {
-    switch (level) {
-      case Level.debug:
-        Log.d(msg);
-        break;
-      case Level.error:
-        Log.e(msg, StackTrace.current);
-        break;
-      case Level.info:
-        Log.i(msg);
-        break;
-      case Level.warning:
-        Log.w(msg);
-        break;
-      default:
-        Log.logPrint(msg);
-    }
-  };
 }
 
 class MyApp extends StatelessWidget {

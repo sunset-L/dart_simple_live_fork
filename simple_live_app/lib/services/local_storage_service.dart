@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
 import 'package:simple_live_app/app/log.dart';
@@ -179,13 +181,13 @@ class LocalStorageService extends GetxService {
   late Box settingsBox;
   late Box<String> shieldBox;
 
-  Future init() async {
-    settingsBox = await Hive.openBox(
-      "LocalStorage",
-    );
-    shieldBox = await Hive.openBox(
-      "DanmuShield",
-    );
+  Future<void> init() async {
+    final (settings, shield) = await (
+      Hive.openBox<dynamic>("LocalStorage"),
+      Hive.openBox<String>("DanmuShield"),
+    ).wait;
+    settingsBox = settings;
+    shieldBox = shield;
   }
 
   T getValue<T>(dynamic key, T defaultValue) {

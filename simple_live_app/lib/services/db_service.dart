@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
@@ -13,10 +15,15 @@ class DBService extends GetxService {
   late Box<FollowUserTag> tagBox;
   final Uuid uuid = const Uuid();
 
-  Future init() async {
-    historyBox = await Hive.openBox("History");
-    followBox = await Hive.openBox("FollowUser");
-    tagBox = await Hive.openBox("FollowUserTag");
+  Future<void> init() async {
+    final (history, follows, tags) = await (
+      Hive.openBox<History>("History"),
+      Hive.openBox<FollowUser>("FollowUser"),
+      Hive.openBox<FollowUserTag>("FollowUserTag"),
+    ).wait;
+    historyBox = history;
+    followBox = follows;
+    tagBox = tags;
   }
 
   // follow_user_tag 相关逻辑
