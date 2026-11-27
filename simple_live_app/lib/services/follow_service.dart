@@ -114,8 +114,7 @@ class FollowService extends GetxService {
     curTagFollowList.assignAll(sortFollowUsers(curTagFollowList));
   }
 
-  /// Groups users by configured platform order, then puts live users first
-  /// within each platform while preserving the original order for ties.
+  /// Sorts by live status, configured platform order, then incoming order.
   List<FollowUser> sortFollowUsers(Iterable<FollowUser> users) {
     final platformOrder = {
       for (var index = 0;
@@ -126,14 +125,14 @@ class FollowService extends GetxService {
     final indexedUsers = users.toList().asMap().entries.toList();
 
     indexedUsers.sort((a, b) {
+      final statusComparison =
+          b.value.liveStatus.value.compareTo(a.value.liveStatus.value);
+      if (statusComparison != 0) return statusComparison;
+
       final platformComparison =
           (platformOrder[a.value.siteId] ?? platformOrder.length)
               .compareTo(platformOrder[b.value.siteId] ?? platformOrder.length);
       if (platformComparison != 0) return platformComparison;
-
-      final statusComparison =
-          b.value.liveStatus.value.compareTo(a.value.liveStatus.value);
-      if (statusComparison != 0) return statusComparison;
 
       return a.key.compareTo(b.key);
     });

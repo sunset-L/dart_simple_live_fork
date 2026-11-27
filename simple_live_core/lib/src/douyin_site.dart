@@ -473,7 +473,7 @@ class DouyinSite implements LiveSite {
 
     var roomStatus = status == 2;
     // 主要是为了获取cookie,用于弹幕websocket连接
-    var headers = await getRequestHeaders();
+    final danmakuCookie = await _getGuestTtwid() ?? "";
 
     return LiveRoomDetail(
       roomId: webRid,
@@ -492,7 +492,7 @@ class DouyinSite implements LiveSite {
         webRid: webRid,
         roomId: roomId,
         userId: userUniqueId,
-        cookie: headers["cookie"],
+        cookie: danmakuCookie,
       ),
       data: room["stream_url"],
     );
@@ -542,7 +542,7 @@ class DouyinSite implements LiveSite {
     var roomStatus = (asT<int?>(roomData["status"]) ?? 0) == 2;
 
     // 主要是为了获取cookie,用于弹幕websocket连接
-    var headers = await getRequestHeaders();
+    final danmakuCookie = await _getGuestTtwid() ?? "";
     return LiveRoomDetail(
       roomId: webRid,
       title: roomData["title"].toString(),
@@ -564,7 +564,7 @@ class DouyinSite implements LiveSite {
         webRid: webRid,
         roomId: roomId,
         userId: userUniqueId,
-        cookie: headers["cookie"],
+        cookie: danmakuCookie,
       ),
       data: roomStatus ? roomData["stream_url"] : {},
     );
@@ -585,7 +585,7 @@ class DouyinSite implements LiveSite {
     var roomStatus = (asT<int?>(room["status"]) ?? 0) == 2;
 
     // 主要是为了获取cookie,用于弹幕websocket连接
-    var headers = await getRequestHeaders();
+    final danmakuCookie = await _getGuestTtwid() ?? "";
 
     return LiveRoomDetail(
       roomId: webRid,
@@ -608,7 +608,7 @@ class DouyinSite implements LiveSite {
         webRid: webRid,
         roomId: roomId,
         userId: userUniqueId,
-        cookie: headers["cookie"],
+        cookie: danmakuCookie,
       ),
       data: roomStatus ? room["stream_url"] : {},
     );

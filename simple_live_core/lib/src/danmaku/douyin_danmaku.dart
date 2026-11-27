@@ -96,14 +96,19 @@ class DouyinDanmaku implements LiveDanmaku {
       "webcast3-ws-web-lq",
       "webcast5-ws-web-lf",
     );
+    final socketHeaders = <String, dynamic>{
+      "User-Agent": DouyinSite.kDefaultUserAgent,
+      "Origin": "https://live.douyin.com",
+    };
+    final danmakuCookie = danmakuArgs.cookie.trim();
+    if (danmakuCookie.isNotEmpty) {
+      socketHeaders["Cookie"] = danmakuCookie;
+    }
+
     webScoketUtils = WebScoketUtils(
       url: url,
       backupUrl: backupUrl,
-      headers: {
-        "User-Agent": DouyinSite.kDefaultUserAgent,
-        "Cookie": danmakuArgs.cookie,
-        "Origin": "https://live.douyin.com",
-      },
+      headers: socketHeaders,
       heartBeatTime: heartbeatTime,
       onMessage: (e) {
         decodeMessage(e);
