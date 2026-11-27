@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:dio/dio.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 import 'package:simple_live_core/src/common/convert_helper.dart';
 import 'package:simple_live_core/src/common/http_client.dart';
@@ -24,13 +25,18 @@ class DouyinSite implements LiveSite {
 
   static const String kDefaultAuthority = "live.douyin.com";
 
-  /// 默认 Cookie - 只需要 ttwid 字段即可获取所有画质（包括蓝光）
-  /// 经过测试验证，LOGIN_STATUS=1 等其他字段都是可选的
+  @Deprecated("The default ttwid is now fetched automatically.")
   static const String kDefaultCookie =
       "ttwid=1%7CB1qls3GdnZhUov9o2NxOMxxYS2ff6OSvEWbv0ytbES4%7C1680522049%7C280d802d6d478e3e78d0c807f7c487e7ffec0ae4e5fdd6a0fe74c3c6af149511";
 
-  /// 用户设置的 cookie
+  static const Duration _guestTtwidCacheDuration = Duration(hours: 6);
+  static const Duration _guestTtwidFailureCacheDuration = Duration(minutes: 1);
+
+  /// 用户设置的访客 ttwid 覆盖值；留空时自动获取匿名 Cookie。
   String cookie = "";
+  String? _cachedGuestTtwid;
+  DateTime? _guestTtwidFetchedAt;
+  Future<String?>? _guestTtwidRequest;
 
   void _logDebug(String msg) {
     // 同时使用 print 和 CoreLog 确保日志输出
@@ -44,23 +50,115 @@ class DouyinSite implements LiveSite {
     "User-Agent": kDefaultUserAgent,
   };
 
-  Future<Map<String, dynamic>> getRequestHeaders() async {
+  Future<Map<String, dynamic>> getRequestHeaders({String? referer}) async {
+    final requestHeaders = Map<String, dynamic>.from(headers);
+    if (referer != null && referer.isNotEmpty) {
+      requestHeaders["Referer"] = referer;
+    }
+
+    // 手动配置仅作为覆盖；默认从公开页面获取访客 ttwid，不使用账号登录态。
+    final ttwid = cookie.isNotEmpty ? cookie : await _getGuestTtwid();
+    if (ttwid != null && ttwid.isNotEmpty) {
+      requestHeaders["cookie"] = ttwid;
+    }
+    return requestHeaders;
+  }
+
+  Future<String?> _getGuestTtwid({bool forceRefresh = false}) async {
+    final now = DateTime.now();
+    final cachedAt = _guestTtwidFetchedAt;
+    final cacheDuration = _cachedGuestTtwid == null
+        ? _guestTtwidFailureCacheDuration
+        : _guestTtwidCacheDuration;
+    if (!forceRefresh &&
+        cachedAt != null &&
+        now.difference(cachedAt) < cacheDuration) {
+      return _cachedGuestTtwid;
+    }
+
+    final pendingRequest = _guestTtwidRequest;
+    if (pendingRequest != null) {
+      return pendingRequest;
+    }
+
+    final request = _fetchGuestTtwid();
+    _guestTtwidRequest = request;
     try {
-      // 如果用户已设置 cookie，直接使用用户的 cookie
-      if (cookie.isNotEmpty) {
-        headers["cookie"] = cookie;
-        return headers;
+      final ttwid = await request;
+      _cachedGuestTtwid = ttwid;
+      _guestTtwidFetchedAt = DateTime.now();
+      if (ttwid == null) {
+        _logDebug("未获取到访客 ttwid，将尝试无 Cookie 请求");
+      } else {
+        _logDebug("已自动获取抖音访客 ttwid");
+      }
+      return ttwid;
+    } finally {
+      if (identical(_guestTtwidRequest, request)) {
+        _guestTtwidRequest = null;
+      }
+    }
+  }
+
+  Future<String?> _fetchGuestTtwid() async {
+    String? parseTtwid(dynamic setCookies) {
+      if (setCookies is! Iterable) return null;
+      for (final setCookie in setCookies) {
+        final cookiePair = setCookie.toString().split(";").first.trim();
+        final separator = cookiePair.indexOf("=");
+        if (separator <= 0) continue;
+        final cookieName = cookiePair.substring(0, separator).trim();
+        if (cookieName.toLowerCase() == "ttwid") {
+          return cookiePair;
+        }
+      }
+      return null;
+    }
+
+    // Avoid the shared HTTP interceptor here: verbose HTTP logs include Set-Cookie.
+    final client = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 20),
+        receiveTimeout: const Duration(seconds: 20),
+        sendTimeout: const Duration(seconds: 20),
+      ),
+    );
+    try {
+      try {
+        final response = await client.post(
+          "https://ttwid.bytedance.com/ttwid/union/register/",
+          data: {
+            "aid": 6383,
+            "union": true,
+            "needFid": false,
+            "region": "cn",
+            "cbUrlProtocol": "https",
+            "service": "live.douyin.com",
+          },
+          options: Options(
+            headers: {"User-Agent": kDefaultUserAgent},
+            contentType: Headers.jsonContentType,
+            responseType: ResponseType.plain,
+          ),
+        );
+        final ttwid = parseTtwid(response.headers["set-cookie"]);
+        if (ttwid != null) return ttwid;
+      } catch (_) {
+        // 注册接口不可用时，再尝试从直播首页获取访客 Cookie。
       }
 
-      // 使用默认的 ttwid cookie（只需要 ttwid 即可获取所有画质）
-      headers["cookie"] = kDefaultCookie;
-      return headers;
-    } catch (e) {
-      CoreLog.error(e);
-      if (!(headers["cookie"]?.toString().isNotEmpty ?? false)) {
-        headers["cookie"] = kDefaultCookie;
+      try {
+        final response = await client.head(
+          "https://live.douyin.com/",
+          options: Options(headers: Map<String, dynamic>.from(headers)),
+        );
+        return parseTtwid(response.headers["set-cookie"]);
+      } catch (_) {
+        // 获取失败时保留无 Cookie 请求路径，避免阻断普通房间解析。
+        return null;
       }
-      return headers;
+    } finally {
+      client.close(force: true);
     }
   }
 
@@ -405,10 +503,20 @@ class DouyinSite implements LiveSite {
   /// - 返回直播间信息
   Future<LiveRoomDetail> getRoomDetailByWebRid(String webRid) async {
     try {
-      var result = await _getRoomDetailByWebRidApi(webRid);
-      return result;
+      return await _getRoomDetailByWebRidApi(webRid);
     } catch (e) {
       CoreLog.error(e);
+    }
+
+    // 访客 Cookie 可能已失效，自动刷新一次后再尝试 API。
+    if (cookie.isEmpty && _cachedGuestTtwid != null) {
+      _guestTtwidFetchedAt = null;
+      await _getGuestTtwid(forceRefresh: true);
+      try {
+        return await _getRoomDetailByWebRidApi(webRid);
+      } catch (e) {
+        CoreLog.error(e);
+      }
     }
     return await _getRoomDetailByWebRidHtml(webRid);
   }
@@ -575,11 +683,9 @@ class DouyinSite implements LiveSite {
   Future<Map> _getRoomDataByApi(String webRid) async {
     String serverUrl = "https://live.douyin.com/webcast/room/web/enter/";
 
-    // 提前获取 headers
-    var requestHeader = await getRequestHeaders();
-
-    // 使用动态 Referer（包含房间号，参考 DouyinLiveRecorder）
-    requestHeader["Referer"] = "https://live.douyin.com/$webRid";
+    final requestHeader = await getRequestHeaders(
+      referer: "https://live.douyin.com/$webRid",
+    );
 
     var uri = Uri.parse(serverUrl).replace(
       scheme: "https",
